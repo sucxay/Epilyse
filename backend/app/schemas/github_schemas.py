@@ -90,3 +90,14 @@ class IngestionRun(BaseModel):
     bytes_processed: int = 0
 
     error: str | None = None
+
+
+class RepositoryRegisterRequest(BaseModel):
+    url: str = Field(
+        min_length=1,
+        description="GitHub repository URL",
+    )
+    branch: str | None = Field(
+        default=None,
+        description="Branch to track; defaults to the repository's default branch",
+    )
