@@ -59,7 +59,7 @@ def clone_repository(
 
     if not commit_sha:
         # Try the SHA stored during registration.
-        stored_sha = repository.get("latest_commit_sha")
+        stored_sha = repository["latest_commit_sha"]
         if stored_sha:
             commit_sha = stored_sha
         else:

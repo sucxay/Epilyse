@@ -80,6 +80,54 @@ function colorForNode(node: GraphNode): string {
     : nodeColors[node.type];
 }
 
+function chooseLabelIds(
+  nodes: SimulationNode[],
+  visibleNodeIds: Set<string>,
+  relatedNodeIds: Set<string>,
+  matches: Set<string>,
+  selectedId: string | null,
+  hoveredId: string | null,
+  degrees: Map<string, number>,
+  zoom: number,
+): Set<string> {
+  if (zoom < 0.55) return new Set([selectedId, hoveredId].filter((id): id is string => Boolean(id)));
+
+  const limit = zoom >= 1.1 ? 42 : zoom >= 0.8 ? 26 : 14;
+  const candidates = nodes
+    .filter((node) => visibleNodeIds.has(node.id) && relatedNodeIds.has(node.id))
+    .map((node) => {
+      const priority =
+        (node.id === selectedId ? 10000 : 0)
+        + (node.id === hoveredId ? 9000 : 0)
+        + (matches.has(node.id) ? 5000 : 0)
+        + (relatedNodeIds.has(node.id) ? 1000 : 0)
+        + (degrees.get(node.id) ?? 0);
+      return { node, priority };
+    })
+    .sort((left, right) => right.priority - left.priority || left.node.id.localeCompare(right.node.id));
+
+  const placed: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+  const labels = new Set<string>();
+  for (const { node } of candidates) {
+    if (labels.size >= limit) break;
+    const width = Math.min(176, Math.max(42, nodeLabel(node).length * 6.2 + 14)) / zoom;
+    const height = 18 / zoom;
+    const radius = node.type === "file" ? 18 : 10;
+    const box = {
+      left: node.x - width / 2,
+      right: node.x + width / 2,
+      top: node.y + radius + 4 / zoom,
+      bottom: node.y + radius + 4 / zoom + height,
+    };
+    if (placed.some((other) => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top)) {
+      continue;
+    }
+    placed.push(box);
+    labels.add(node.id);
+  }
+  return labels;
+}
+
 function deterministicPosition(index: number, count: number): { x: number; y: number } {
   const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
   return {
@@ -135,7 +183,16 @@ function ForceGraph({ graph }: GraphCanvasProps) {
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const pausedRef = useRef(false);
   const cursorPhysicsRef = useRef(false);
-  const renderStateRef = useRef({ selectedId: null as string | null, query: "", zoom: 0.85 });
+  const renderStateRef = useRef({
+    selectedId: null as string | null,
+    hoveredId: null as string | null,
+    query: "",
+    zoom: 0.85,
+    matches: new Set<string>(),
+    neighbors: new Set<string>(),
+    visibleNodeIds: new Set<string>(),
+    degrees: new Map<string, number>(),
+  });
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(252);
@@ -238,6 +295,14 @@ function ForceGraph({ graph }: GraphCanvasProps) {
         .map((node) => node.id) ?? [],
     );
   }, [graph, query]);
+  const degrees = useMemo(() => {
+    const result = new Map<string, number>();
+    allEdges.forEach((edge) => {
+      result.set(edge.source, (result.get(edge.source) ?? 0) + 1);
+      result.set(edge.target, (result.get(edge.target) ?? 0) + 1);
+    });
+    return result;
+  }, [allEdges]);
 
   useEffect(() => {
     const term = query.trim();
@@ -253,7 +318,16 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     window.requestAnimationFrame(() => fitView({ nodes: [{ id: firstMatch.id }], padding: 0.7, duration: 250 }));
   }, [fitView, graph, matches, query]);
 
-  renderStateRef.current = { selectedId: selectedId ?? hoveredId, query, zoom };
+  renderStateRef.current = {
+    selectedId: selectedId ?? hoveredId,
+    hoveredId,
+    query,
+    zoom,
+    matches,
+    neighbors,
+    visibleNodeIds,
+    degrees,
+  };
   pausedRef.current = paused;
   cursorPhysicsRef.current = cursorPhysics;
 
@@ -261,12 +335,31 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     if (frameRef.current !== null) return;
     frameRef.current = window.requestAnimationFrame(() => {
       frameRef.current = null;
-      const { selectedId: selected, query: search, zoom: currentZoom } = renderStateRef.current;
+      const {
+        selectedId: selected,
+        hoveredId: hovered,
+        query: search,
+        zoom: currentZoom,
+        matches: currentMatches,
+        neighbors: currentNeighbors,
+        visibleNodeIds: currentVisibleNodeIds,
+        degrees: currentDegrees,
+      } = renderStateRef.current;
       const term = search.trim();
+      const labelIds = chooseLabelIds(
+        simNodesRef.current,
+        currentVisibleNodeIds,
+        currentNeighbors,
+        currentMatches,
+        selected,
+        hovered,
+        currentDegrees,
+        currentZoom,
+      );
       setNodes(simNodesRef.current.map((node) => {
-        const isRelated = !selected || neighbors.has(node.id);
-        const isMatch = !term || matches.has(node.id);
-        const radius = node.type === "file" ? 13 : 5 + Math.min(5, allEdges.filter((edge) => edge.source === node.id || edge.target === node.id).length);
+        const isRelated = !selected || currentNeighbors.has(node.id);
+        const isMatch = !term || currentMatches.has(node.id);
+        const radius = node.type === "file" ? 13 : 5 + Math.min(5, currentDegrees.get(node.id) ?? 0);
         return {
           id: node.id,
           type: "dot",
@@ -275,37 +368,39 @@ function ForceGraph({ graph }: GraphCanvasProps) {
             kind: node.kind ?? node.type,
             color: colorForNode(node),
             radius,
-            showLabel: currentZoom > 0.72 || node.id === selected || matches.has(node.id),
+            showLabel: labelIds.has(node.id) && isRelated && isMatch,
             selected: node.id === selected,
           },
           position: { x: node.x, y: node.y },
           draggable: true,
-          hidden: !visibleNodeIds.has(node.id),
+          hidden: !currentVisibleNodeIds.has(node.id),
           className: isRelated && isMatch ? "opacity-100" : "opacity-20",
         };
       }));
     });
-  }, [allEdges, matches, neighbors, visibleNodeIds]);
+  }, []);
 
   const renderEdges = useCallback(() => {
     setEdges(activeEdges.map((edge, index) => {
-      const focusId = selectedId ?? hoveredId;
+      const focusId = hoveredId ?? selectedId;
       const connected = !focusId || edge.source === focusId || edge.target === focusId;
+      const glowingImport = edge.type === "import" && Boolean(focusId) && connected;
       return {
         id: `${edge.source}-${edge.target}-${edge.type}-${index}`,
         source: edge.source,
         target: edge.target,
         label: zoom > 1.25 && connected ? edge.type.toUpperCase() : undefined,
-        animated: false,
+        animated: glowingImport && !paused,
+        className: glowingImport ? "epilyse-import-edge" : undefined,
         style: {
           stroke: relationshipColors[edge.type],
-          strokeWidth: connected ? 1.2 : 0.7,
-          opacity: connected ? 0.65 : 0.1,
+          strokeWidth: glowingImport ? 3.2 : connected ? 1.8 : 1,
+          opacity: glowingImport ? 1 : connected ? 0.72 : 0.12,
         },
-        labelStyle: { fill: relationshipColors[edge.type], fontSize: 8, fontWeight: 700 },
+        labelStyle: { fill: relationshipColors[edge.type], fontSize: 9, fontWeight: 700 },
       };
     }));
-  }, [activeEdges, hoveredId, selectedId, zoom]);
+  }, [activeEdges, hoveredId, paused, selectedId, zoom]);
 
   const architectureSignature = useMemo(
     () => `${Array.from(visibleNodeIds).sort().join("|")}::${activeEdges.map((edge) => `${edge.source}-${edge.target}-${edge.type}`).sort().join("|")}`,
@@ -409,6 +504,10 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     renderEdges();
     requestRender();
   }, [activeEdges, renderEdges, requestRender]);
+
+  useEffect(() => {
+    requestRender();
+  }, [hoveredId, query, requestRender, selectedId, zoom]);
 
   useEffect(() => {
     if (paused) simulationRef.current?.stop();
@@ -583,7 +682,7 @@ function ForceGraph({ graph }: GraphCanvasProps) {
           >
             <Background color="#273449" gap={24} size={1} />
             <Controls position="bottom-right" />
-            <MiniMap nodeColor={(node) => node.data?.color as string ?? "#89a0b9"} maskColor="rgba(2, 6, 23, 0.78)" />
+            <MiniMap className="epilyse-minimap" nodeColor={(node) => node.data?.color as string ?? "#89a0b9"} maskColor="rgba(2, 6, 23, 0.78)" />
           </ReactFlow>
           {!graph && <div className="absolute inset-0 grid place-items-center text-center text-sm text-slate-500">Analyze a repository to explore its source-backed graph.</div>}
           {graph?.nodes.length === 0 && <div className="absolute inset-0 grid place-items-center text-sm text-slate-500">No supported source nodes were found.</div>}

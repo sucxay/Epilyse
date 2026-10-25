@@ -19,8 +19,14 @@ export function AnalysisPanel({ onComplete }: AnalysisPanelProps) {
     setStep("registering");
     try {
       const registration = await registerRepository(url.trim(), revision.trim());
+      if (!registration.repository_id || !registration.current_commit_sha) {
+        throw new Error("Repository registration succeeded, but no commit SHA was returned.");
+      }
       setStep("cloning");
       const clone = await cloneRepository(registration.repository_id, registration.current_commit_sha);
+      if (clone.commit_sha !== registration.current_commit_sha) {
+        throw new Error("The checked-out commit does not match the registered repository revision.");
+      }
       setStep("graph");
       const graph = await buildRepositoryGraph(registration.repository_id, clone.commit_sha);
       onComplete(registration, clone, graph);

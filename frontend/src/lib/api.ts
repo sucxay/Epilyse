@@ -75,9 +75,13 @@ export function registerRepository(url: string, revision: string): Promise<Regis
 }
 
 export function cloneRepository(repositoryId: string, commitSha: string): Promise<CloneResponse> {
+  const normalizedCommitSha = commitSha.trim();
+  if (!normalizedCommitSha) {
+    return Promise.reject(new Error("The backend did not return a commit SHA for this repository."));
+  }
   return request<CloneResponse>(`/repositories/${repositoryId}/clone`, {
     method: "POST",
-    body: JSON.stringify({ commit_sha: commitSha || null }),
+    body: JSON.stringify({ commit_sha: normalizedCommitSha }),
   });
 }
 
@@ -85,8 +89,12 @@ export function buildRepositoryGraph(
   repositoryId: string,
   commitSha: string,
 ): Promise<RepositoryGraph> {
+  const normalizedCommitSha = commitSha.trim();
+  if (!normalizedCommitSha) {
+    return Promise.reject(new Error("A resolved commit SHA is required before building the graph."));
+  }
   return request<RepositoryGraph>(`/repositories/${repositoryId}/graph`, {
     method: "POST",
-    body: JSON.stringify({ commit_sha: commitSha || null }),
+    body: JSON.stringify({ commit_sha: normalizedCommitSha }),
   });
 }
