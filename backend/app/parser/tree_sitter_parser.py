@@ -1,11 +1,12 @@
-from pathlib import Path 
-import tree_sitter_python 
-from tree_sitter import Language , Parser 
+from pathlib import Path
+
+from tree_sitter import Language, Parser
+import tree_sitter_python as tspython 
 
 from backend.app.parser.models import ParsedFile, ImportInfo, DefinitionInfo, CallInfo
 
 
-PYTHON_LANGUAGE = Language(tree_sitter_python.language())
+PYTHON_LANGUAGE = Language(tspython.language())
 
 def get_language(language:str)->Language:
     """Return the Tree Sitter grammar for supported Language"""
@@ -15,11 +16,10 @@ def get_language(language:str)->Language:
 
     raise ValueError(f"Unsupported language : {language}")
 
-def parse_source(source:bytes , language :str):
+def parse_source(source: bytes, language: str):
     grammar = get_language(language)
     parser = Parser(grammar)
     return parser.parse(source)
-
 
 
 def extract_imports(root_node , source:bytes) -> list[ImportInfo]:

@@ -6,12 +6,22 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from fastapi import FastAPI 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.repositories import router as repositories_router 
 from backend.app.api import cloning
+from backend.app.api import graph
 from backend.app.db.init_db import initialize_database
 
 app = FastAPI(title = "Epilyse",version = "0.0.1")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def on_startup():
@@ -19,9 +29,9 @@ def on_startup():
 
 app.include_router(repositories_router)
 app.include_router(cloning.router)
+app.include_router(graph.router)
 @app.get("/health")
 def health():
     return {"status":"ok"}
 
     
-
