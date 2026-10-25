@@ -8,9 +8,7 @@ router = APIRouter(prefix ="/repositories",tags=['Repositories'])
 @router.post("/register",status_code=201)
 def register(request : RepositoryRegisterRequest):
     try:
-        return register_repository(request.url , request.branch)
+        return register_repository(request.url , request.branch , request.sha)
     except ValueError as exc :
         raise HTTPException(status_code=400 , detail=str(exc))
-    
-
     

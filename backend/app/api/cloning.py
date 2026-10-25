@@ -36,7 +36,7 @@ def clone_repository(
     try:
         repository = connection.execute(
             """
-            SELECT id, url, selected_branch
+            SELECT id, url, selected_branch, latest_commit_sha
             FROM repositories
             WHERE id = ?
             """,
@@ -58,19 +58,24 @@ def clone_repository(
     commit_sha = request.commit_sha
 
     if not commit_sha:
-        try:
-            owner, name = parse_github_url(repository_url)
-            github_repo = get_github_client().get_repo(
-                f"{owner}/{name}"
-            )
-            commit_sha = github_repo.get_branch(
-                branch_name
-            ).commit.sha
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="Could not resolve the target GitHub commit.",
-            ) from exc
+        # Try the SHA stored during registration.
+        stored_sha = repository.get("latest_commit_sha")
+        if stored_sha:
+            commit_sha = stored_sha
+        else:
+            try:
+                owner, name = parse_github_url(repository_url)
+                github_repo = get_github_client().get_repo(
+                    f"{owner}/{name}"
+                )
+                commit_sha = github_repo.get_branch(
+                    branch_name
+                ).commit.sha
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Could not resolve the target GitHub commit.",
+                ) from exc
 
     # 3. Shallow-clone and inspect the requested commit.
     try:

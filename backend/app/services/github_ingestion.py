@@ -66,7 +66,7 @@ def get_github_client() -> Github:
     return Github()
 
 
-def register_repository(url: str, branch: str | None = None) -> dict:
+def register_repository(url: str, branch: str | None = None ,sha : str|None = None) -> dict:
     owner, name = parse_github_url(url)
     client = get_github_client()
 
@@ -75,9 +75,14 @@ def register_repository(url: str, branch: str | None = None) -> dict:
 
         selected_branch = branch or gh_repo.default_branch
 
-        # Confirm the requested branch exists.
-        branch_info = gh_repo.get_branch(selected_branch)
-        commit_sha = branch_info.commit.sha
+        if sha:
+            if not re.fullmatch(r"[a-fA-F0-9]{32,64}", sha):
+                raise ValueError("Commit SHA must contain 32 to 64 hexadecimal characters.")
+            commit_sha = gh_repo.get_commit(sha).sha
+        else:
+            # Confirm the requested branch exists.
+            branch_info = gh_repo.get_branch(selected_branch)
+            commit_sha = branch_info.commit.sha
 
         canonical_url = f"https://github.com/{gh_repo.full_name}"
         timestamp = utc_now()
@@ -102,7 +107,7 @@ def register_repository(url: str, branch: str | None = None) -> dict:
                     canonical_url,
                     gh_repo.default_branch,
                     selected_branch,
-                    None,
+                    commit_sha,
                     timestamp,
                     timestamp,
                 ),
@@ -112,10 +117,10 @@ def register_repository(url: str, branch: str | None = None) -> dict:
             connection.execute(
                 """
                 UPDATE repositories
-                SET selected_branch = ?, updated_at = ?
+                SET selected_branch = ?, latest_commit_sha = ?, updated_at = ?
                 WHERE url = ?
                 """,
-                (selected_branch, timestamp, canonical_url),
+                (selected_branch, commit_sha, timestamp, canonical_url),
             )
 
             row = connection.execute(
@@ -140,6 +145,7 @@ def register_repository(url: str, branch: str | None = None) -> dict:
             "current_commit_sha": commit_sha,
             "latest_analyzed_sha": row["latest_commit_sha"],
             "ingestion_status": row["ingestion_status"],
+            "sha":sha
         }
 
     except GithubException as exc:

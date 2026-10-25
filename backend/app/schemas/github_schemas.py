@@ -101,3 +101,7 @@ class RepositoryRegisterRequest(BaseModel):
         default=None,
         description="Branch to track; defaults to the repository's default branch",
     )
+    sha: str | None = Field(
+        default=None,
+        description="Exact commit SHA to analyze; when provided it takes precedence over branch.",
+    )

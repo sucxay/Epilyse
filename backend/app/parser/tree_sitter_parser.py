@@ -97,10 +97,13 @@ def extract_calls(root_node, source: bytes) -> list[CallInfo]:
             function_node = node.child_by_field_name("function")
 
             if function_node is not None:
+                called_name = source[
+                    function_node.start_byte:function_node.end_byte
+                ].decode("utf-8", errors="replace")
                 calls.append(CallInfo(
-                    name=source[
-                        function_node.start_byte:function_node.end_byte
-                    ].decode("utf-8", errors="replace"),
+                    # CallInfo stores the bare identifier so attribute calls
+                    # such as ``service.run()`` can resolve to ``run``.
+                    name=called_name.rsplit(".", 1)[-1],
                     scope=scope,
                     line=node.start_point.row + 1,
                 ))

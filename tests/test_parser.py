@@ -1,6 +1,6 @@
 from pathlib import Path 
 from backend.app.services.source_analyzer import analyze_repository
-from backend.app.parser.tree_sitter import parse_files
+from backend.app.parser.tree_sitter_parser import parse_files
 from backend.app.parser.models import ParsedFile
 
 
