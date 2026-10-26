@@ -2,8 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Google Font ────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
 :root {
-  color-scheme: light;
+  color-scheme: dark;
+
+  /* Graph theme variables — set inline on the container,
+     but fallback values live here */
+  --graph-bg: #05060f;
+  --graph-vignette: rgba(5, 6, 15, 0.85);
+  --graph-dot: rgba(255, 255, 255, 0.04);
+  --graph-label: rgba(220, 225, 240, 0.92);
+  --graph-label-halo: rgba(5, 6, 15, 0.75);
+  --graph-sidebar-bg: rgba(8, 10, 22, 0.88);
+  --graph-sidebar-border: rgba(255, 255, 255, 0.06);
+  --graph-glass-blur: 16px;
 }
 
 * {
@@ -12,9 +26,11 @@
 
 body {
   margin: 0;
-  background: #f5f7fa;
-  color: #17212b;
-  font-family: Arial, Helvetica, sans-serif;
+  background: #05060f;
+  color: #c8d2e6;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -22,42 +38,122 @@ input {
   font: inherit;
 }
 
-.react-flow__attribution {
-  display: none;
+/* ── Graph container ────────────────────────────────────────────────── */
+
+.graph-container {
+  isolation: isolate;
 }
 
-.epilyse-minimap {
-  overflow: hidden;
-  border: 1px solid #273449;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.92);
-  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.35);
+.graph-canvas {
+  touch-action: none;
+  outline: none;
 }
 
-.epilyse-minimap .react-flow__minimap-mask {
-  fill: rgba(2, 6, 23, 0.72);
-  stroke: #64748b;
+.graph-canvas:focus-visible {
+  outline: 2px solid rgba(108, 140, 255, 0.5);
+  outline-offset: -2px;
 }
 
-.epilyse-import-edge .react-flow__edge-path {
-  filter: drop-shadow(0 0 3px rgba(145, 164, 188, 0.9));
+/* ── Sidebar glass panel ────────────────────────────────────────────── */
+
+.graph-sidebar {
+  background: var(--graph-sidebar-bg);
+  border-color: var(--graph-sidebar-border);
+  backdrop-filter: blur(var(--graph-glass-blur));
+  -webkit-backdrop-filter: blur(var(--graph-glass-blur));
 }
 
-.epilyse-import-edge.animated .react-flow__edge-path {
-  animation: epilyse-edge-shine 900ms linear infinite;
+.graph-sidebar-content {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
 }
 
-@keyframes epilyse-edge-shine {
+.graph-sidebar-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.graph-sidebar-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.graph-sidebar-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+/* ── Sidebar buttons ────────────────────────────────────────────────── */
+
+.graph-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(200, 210, 230, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.graph-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: rgba(220, 225, 240, 0.95);
+}
+
+/* ── Search input ───────────────────────────────────────────────────── */
+
+.graph-search-input::placeholder {
+  color: rgba(160, 170, 200, 0.3);
+}
+
+.graph-search-input:focus {
+  border-color: rgba(108, 140, 255, 0.4);
+  box-shadow: 0 0 0 3px rgba(108, 140, 255, 0.1);
+}
+
+/* ── Checkbox theming ───────────────────────────────────────────────── */
+
+.graph-checkbox {
+  accent-color: #6c8cff;
+  cursor: pointer;
+}
+
+/* ── Info panel ─────────────────────────────────────────────────────── */
+
+.graph-info-panel {
+  animation: graph-panel-in 0.25s ease-out;
+}
+
+@keyframes graph-panel-in {
   from {
-    stroke-dashoffset: 18;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
   }
   to {
-    stroke-dashoffset: 0;
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
+/* ── Status bar ─────────────────────────────────────────────────────── */
+
+.graph-statusbar {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────── */
+
 @media (prefers-reduced-motion: reduce) {
-  .epilyse-import-edge.animated .react-flow__edge-path {
+  .graph-info-panel {
     animation: none;
   }
+
+  .graph-sidebar {
+    transition: none;
+  }
+}
+
+/* ── Legacy React Flow styles (no longer used, but safe to keep) ──── */
+
+.react-flow__attribution {
+  display: none;
 }

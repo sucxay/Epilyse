@@ -1,9 +1,8 @@
- "use client";
+"use client";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { GraphCanvas } from "@/components/GraphCanvas";
-import { Sidebar } from "@/components/Sidebar";
 import type { RepositoryGraph } from "@/lib/api";
 
 export default function GraphPage() {
@@ -22,14 +21,42 @@ export default function GraphPage() {
   }, []);
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar />
-      <main className="min-w-0 flex-1">
-        <header className="border-b border-slate-200 bg-white px-5 py-5 sm:px-8"><div className="mx-auto max-w-6xl"><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-400">Workspace</p><h1 className="mt-1 text-xl font-bold tracking-tight">Dependency graph</h1></div></header>
-        <div className="mx-auto max-w-6xl space-y-5 px-5 py-7 sm:px-8">
-          <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">Explore imports, definitions, and calls for an analyzed revision.</p></div><Link href="/" className="text-sm font-bold text-accent hover:underline">← Back to overview</Link></div>
-          <GraphCanvas graph={graph} />
+    <div className="min-h-screen" style={{ background: "#05060f" }}>
+      {/* Minimal header bar */}
+      <header
+        className="flex items-center justify-between px-6 py-3"
+        style={{
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          background: "rgba(8,10,22,0.7)",
+          backdropFilter: "blur(12px)",
+        }}
+      >
+        <div>
+          <p
+            className="text-[10px] font-bold uppercase tracking-[0.2em]"
+            style={{ color: "rgba(108,140,255,0.6)" }}
+          >
+            Epilyse
+          </p>
+          <h1
+            className="text-sm font-bold tracking-tight"
+            style={{ color: "rgba(220,225,240,0.9)" }}
+          >
+            Dependency Graph
+          </h1>
         </div>
+        <Link
+          href="/"
+          className="text-xs font-semibold transition-colors"
+          style={{ color: "rgba(108,140,255,0.7)" }}
+        >
+          ← Back to overview
+        </Link>
+      </header>
+
+      {/* Graph fills the viewport */}
+      <main className="p-3" style={{ height: "calc(100vh - 56px)" }}>
+        <GraphCanvas graph={graph} />
       </main>
     </div>
   );

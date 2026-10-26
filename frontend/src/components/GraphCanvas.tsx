@@ -1,30 +1,58 @@
 "use client";
 
-import {
-  Background,
-  Controls,
-  MiniMap,
-  ReactFlow,
-  ReactFlowProvider,
-  Handle,
-  Position,
-  useReactFlow,
-} from "@xyflow/react";
-import type { Edge, Node, NodeProps, OnNodeDrag } from "@xyflow/react";
-import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  forceX,
-  forceY,
-  type Simulation,
-} from "d3-force";
+/**
+ * GraphCanvas — Obsidian-style canvas graph visualization.
+ *
+ * Replaces React Flow with a custom HTML5 Canvas renderer powered by
+ * d3-force for layout.  Single requestAnimationFrame loop, spatial
+ * index for hit testing, glow sprites, cursor spotlight, particles.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
-import "@xyflow/react/dist/style.css";
 import type { GraphEdge, GraphNode, RepositoryGraph } from "@/lib/api";
+
+// Graph modules
+import { CLUSTER_PALETTE, CSS_VARS, EDGE_COLORS, INTERACTION, LAYOUT } from "@/lib/graph/theme";
+import {
+  createSimulation,
+  computeDegrees,
+  topDegreeNodeIds,
+  buildNeighborSet,
+  type LayoutNode,
+  type SimulationResult,
+} from "@/lib/graph/layout";
+import {
+  computeCommunities,
+  buildNodeCommunityMap,
+  buildClusterIndexMap,
+  type Community,
+} from "@/lib/graph/communities";
+import { buildLabelCandidates, placeLabels } from "@/lib/graph/labels";
+import {
+  createGlowSprites,
+  renderFrame,
+  screenToWorld,
+  type CameraState,
+  type RenderEdge,
+  type RenderState,
+} from "@/lib/graph/render";
+import { SpatialGrid } from "@/lib/graph/spatial";
+import {
+  createInteractionState,
+  updateCursorSmooth,
+  setCursorTarget,
+  clearCursor,
+  updateHover,
+  updateDimProgress,
+  addRipple,
+  cleanRipples,
+  spawnParticles,
+  updateParticles,
+  handleKeyboard,
+  type InteractionState,
+} from "@/lib/graph/interaction";
+
+/* ── Types ──────────────────────────────────────────────────────────── */
 
 interface GraphCanvasProps {
   graph: RepositoryGraph | null;
@@ -32,236 +60,84 @@ interface GraphCanvasProps {
 
 type RelationshipType = GraphEdge["type"];
 type NodeCategory = GraphNode["type"];
-type SimulationNode = GraphNode & {
-  x: number;
-  y: number;
-  vx?: number;
-  vy?: number;
-  fx?: number | null;
-  fy?: number | null;
-};
-type SimulationLink = {
-  source: string | SimulationNode;
-  target: string | SimulationNode;
-  type: RelationshipType;
-};
-type DotData = {
-  label: string;
-  kind: string;
-  color: string;
-  radius: number;
-  showLabel: boolean;
-  selected: boolean;
-};
 
-const relationshipTypes: RelationshipType[] = ["import", "contains", "calls"];
-const relationshipColors: Record<RelationshipType, string> = {
-  import: "#91a4bc",
-  contains: "#d78b68",
-  calls: "#6fb8aa",
-};
-const nodeColors: Record<NodeCategory, string> = {
-  file: "#334155",
-  symbol: "#d78b68",
-};
-const symbolKindColors: Record<string, string> = {
-  class: "#f3cf45",
-  function: "#73b9ae",
-  method: "#e47783",
-};
+/* ── Helpers ────────────────────────────────────────────────────────── */
 
 function nodeLabel(node: GraphNode): string {
-  return node.name ?? node.path;
+  return node.name ?? node.path.split("/").pop() ?? node.path;
 }
 
-function colorForNode(node: GraphNode): string {
-  return node.type === "symbol" && node.kind
-    ? symbolKindColors[node.kind] ?? nodeColors.symbol
-    : nodeColors[node.type];
-}
-
-function chooseLabelIds(
-  nodes: SimulationNode[],
-  visibleNodeIds: Set<string>,
-  relatedNodeIds: Set<string>,
-  matches: Set<string>,
-  selectedId: string | null,
-  hoveredId: string | null,
-  degrees: Map<string, number>,
-  zoom: number,
-): Set<string> {
-  if (zoom < 0.55) return new Set([selectedId, hoveredId].filter((id): id is string => Boolean(id)));
-
-  const limit = zoom >= 1.1 ? 42 : zoom >= 0.8 ? 26 : 14;
-  const candidates = nodes
-    .filter((node) => visibleNodeIds.has(node.id) && relatedNodeIds.has(node.id))
-    .map((node) => {
-      const priority =
-        (node.id === selectedId ? 10000 : 0)
-        + (node.id === hoveredId ? 9000 : 0)
-        + (matches.has(node.id) ? 5000 : 0)
-        + (relatedNodeIds.has(node.id) ? 1000 : 0)
-        + (degrees.get(node.id) ?? 0);
-      return { node, priority };
-    })
-    .sort((left, right) => right.priority - left.priority || left.node.id.localeCompare(right.node.id));
-
-  const placed: Array<{ left: number; right: number; top: number; bottom: number }> = [];
-  const labels = new Set<string>();
-  for (const { node } of candidates) {
-    if (labels.size >= limit) break;
-    const width = Math.min(176, Math.max(42, nodeLabel(node).length * 6.2 + 14)) / zoom;
-    const height = 18 / zoom;
-    const radius = node.type === "file" ? 18 : 10;
-    const box = {
-      left: node.x - width / 2,
-      right: node.x + width / 2,
-      top: node.y + radius + 4 / zoom,
-      bottom: node.y + radius + 4 / zoom + height,
-    };
-    if (placed.some((other) => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top)) {
-      continue;
-    }
-    placed.push(box);
-    labels.add(node.id);
-  }
-  return labels;
-}
-
-function deterministicPosition(index: number, count: number): { x: number; y: number } {
-  const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
-  return {
-    x: (index % columns - (columns - 1) / 2) * 240,
-    y: (Math.floor(index / columns) - Math.floor(count / columns) / 2) * 170,
-  };
-}
-
-function DotNode({ data }: NodeProps<Node<DotData>>) {
-  return (
-    <div className="group relative flex items-center justify-center" title={data.label}>
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!h-1 !w-1 !border-0 !bg-transparent"
-        aria-label={`${data.label} incoming connection`}
-      />
-      <span
-        className="block rounded-full border-2 shadow-[0_0_14px_rgba(255,255,255,0.1)] transition-transform group-hover:scale-125"
-        style={{
-          width: data.radius,
-          height: data.radius,
-          backgroundColor: data.color,
-          borderColor: data.selected ? "#fff7ed" : `${data.color}cc`,
-          boxShadow: data.selected ? `0 0 0 4px ${data.color}44, 0 0 20px ${data.color}99` : undefined,
-        }}
-      />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!h-1 !w-1 !border-0 !bg-transparent"
-        aria-label={`${data.label} outgoing connection`}
-      />
-      {data.showLabel && (
-        <span className="pointer-events-none absolute left-1/2 top-full mt-1 max-w-44 -translate-x-1/2 truncate whitespace-nowrap text-[10px] font-medium text-slate-200">
-          {data.label}
-        </span>
-      )}
-    </div>
-  );
-}
-
-const nodeTypes = { dot: DotNode };
+/* ── Component ──────────────────────────────────────────────────────── */
 
 function ForceGraph({ graph }: GraphCanvasProps) {
-  const { fitView, screenToFlowPosition } = useReactFlow();
-  const graphRef = useRef<HTMLDivElement>(null);
-  const simulationRef = useRef<Simulation<SimulationNode, SimulationLink> | null>(null);
-  const simNodesRef = useRef<SimulationNode[]>([]);
-  const nodeMapRef = useRef(new Map<string, SimulationNode>());
-  const positionsRef = useRef(new Map<string, { x: number; y: number }>());
-  const frameRef = useRef<number | null>(null);
-  const pointerRef = useRef<{ x: number; y: number } | null>(null);
-  const pausedRef = useRef(false);
-  const cursorPhysicsRef = useRef(false);
-  const renderStateRef = useRef({
-    selectedId: null as string | null,
-    hoveredId: null as string | null,
-    query: "",
-    zoom: 0.85,
-    matches: new Set<string>(),
-    neighbors: new Set<string>(),
-    visibleNodeIds: new Set<string>(),
-    degrees: new Map<string, number>(),
-  });
+  // Refs
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rafRef = useRef<number | null>(null);
+  const simRef = useRef<SimulationResult | null>(null);
+  const interactionRef = useRef<InteractionState>(createInteractionState());
+  const spatialGridRef = useRef(new SpatialGrid());
+  const glowSpritesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
+  const cameraRef = useRef<CameraState>({ x: 0, y: 0, zoom: 1 });
+  const savedPositionsRef = useRef(new Map<string, { x: number; y: number }>());
+  const dirtyRef = useRef(true);
+  const lastFrameRef = useRef(performance.now());
+  const prevLabelsRef = useRef(new Set<string>());
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef({ x: 0, y: 0, camX: 0, camY: 0 });
+  const reducedMotionRef = useRef(false);
 
+  // State
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(252);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
   const [dock, setDock] = useState<"left" | "right">("right");
   const [query, setQuery] = useState("");
-  const [paused, setPaused] = useState(false);
-  const [cursorPhysics, setCursorPhysics] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(0.85);
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(() => new Set());
+  const [settled, setSettled] = useState(false);
   const [enabledRelationships, setEnabledRelationships] = useState<Set<RelationshipType>>(
-    () => new Set(["import"]),
+    () => new Set(["import", "calls"]),
   );
   const [enabledNodeTypes, setEnabledNodeTypes] = useState<Set<NodeCategory>>(
-    () => new Set(["file"]),
+    () => new Set(["file", "symbol"]),
   );
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [settled, setSettled] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem("epilyse-graph-sidebar");
-    if (!saved) return;
-    try {
-      const value = JSON.parse(saved) as { width?: number; dock?: "left" | "right"; collapsed?: boolean };
-      if (typeof value.width === "number") setSidebarWidth(Math.min(380, Math.max(220, value.width)));
-      if (value.dock === "left" || value.dock === "right") setDock(value.dock);
-      if (typeof value.collapsed === "boolean") setSidebarCollapsed(value.collapsed);
-    } catch {
-      window.localStorage.removeItem("epilyse-graph-sidebar");
-    }
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("epilyse-graph-sidebar", JSON.stringify({
-      width: sidebarWidth,
-      dock,
-      collapsed: sidebarCollapsed,
-    }));
-  }, [dock, sidebarCollapsed, sidebarWidth]);
-
-  useEffect(() => {
-    const onFullscreen = () => setFullscreen(document.fullscreenElement === graphRef.current);
-    document.addEventListener("fullscreenchange", onFullscreen);
-    return () => document.removeEventListener("fullscreenchange", onFullscreen);
-  }, []);
-
+  // Derived data
   const allEdges = useMemo(() => graph?.edges ?? [], [graph]);
-  const graphNodeIds = useMemo(
-    () => new Set(graph?.nodes.map((node) => node.id) ?? []),
-    [graph],
+  const allNodes = useMemo(() => graph?.nodes ?? [], [graph]);
+
+  const degrees = useMemo(() => computeDegrees(allEdges), [allEdges]);
+  const topDegreeIds = useMemo(() => topDegreeNodeIds(degrees, 15), [degrees]);
+
+  const communities = useMemo(
+    () => computeCommunities(allNodes, allEdges),
+    [allNodes, allEdges],
   );
-  const invalidEdges = useMemo(
-    () => allEdges.filter((edge) => !graphNodeIds.has(edge.source) || !graphNodeIds.has(edge.target)),
-    [allEdges, graphNodeIds],
+  const nodeCommunityMap = useMemo(
+    () => buildNodeCommunityMap(communities),
+    [communities],
   );
-  const selectedNode = graph?.nodes.find((node) => node.id === selectedId) ?? null;
+  const clusterIndexMap = useMemo(
+    () => buildClusterIndexMap(communities),
+    [communities],
+  );
+
   const visibleNodeIds = useMemo(() => {
     const ids = new Set<string>();
-    graph?.nodes.forEach((node) => {
-      if (!enabledNodeTypes.has(node.type)) return;
-      ids.add(node.id);
-    });
-    if (selectedNode?.type === "symbol") ids.add(selectedNode.id);
+    for (const node of allNodes) {
+      if (enabledNodeTypes.has(node.type)) ids.add(node.id);
+    }
+    // Always show selected node
+    if (selectedId && !ids.has(selectedId)) {
+      const node = allNodes.find((n) => n.id === selectedId);
+      if (node) ids.add(node.id);
+    }
     return ids;
-  }, [enabledNodeTypes, graph, selectedNode]);
+  }, [allNodes, enabledNodeTypes, selectedId]);
+
+  const visibleNodes = useMemo(
+    () => allNodes.filter((n) => visibleNodeIds.has(n.id)),
+    [allNodes, visibleNodeIds],
+  );
 
   const activeEdges = useMemo(() => {
     const seen = new Set<string>();
@@ -275,298 +151,529 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     });
   }, [allEdges, enabledRelationships, visibleNodeIds]);
 
-  const neighbors = useMemo(() => {
-    const result = new Set<string>();
-    const focusId = selectedId ?? hoveredId;
-    if (!focusId) return result;
-    result.add(focusId);
-    allEdges.forEach((edge) => {
-      if (edge.source === focusId) result.add(edge.target);
-      if (edge.target === focusId) result.add(edge.source);
-    });
-    return result;
-  }, [allEdges, hoveredId, selectedId]);
+  const renderEdges = useMemo<RenderEdge[]>(
+    () => activeEdges.map((e) => ({ sourceId: e.source, targetId: e.target, type: e.type })),
+    [activeEdges],
+  );
 
   const matches = useMemo(() => {
     const term = query.trim().toLowerCase();
+    if (!term) return new Set<string>();
     return new Set(
-      graph?.nodes
-        .filter((node) => term && `${nodeLabel(node)} ${node.path}`.toLowerCase().includes(term))
-        .map((node) => node.id) ?? [],
+      allNodes
+        .filter((n) => `${nodeLabel(n)} ${n.path}`.toLowerCase().includes(term))
+        .map((n) => n.id),
     );
-  }, [graph, query]);
-  const degrees = useMemo(() => {
-    const result = new Map<string, number>();
-    allEdges.forEach((edge) => {
-      result.set(edge.source, (result.get(edge.source) ?? 0) + 1);
-      result.set(edge.target, (result.get(edge.target) ?? 0) + 1);
-    });
-    return result;
-  }, [allEdges]);
+  }, [allNodes, query]);
 
-  useEffect(() => {
-    const term = query.trim();
-    if (!term || matches.size === 0 || !graph) return;
-    const matchingNodes = graph.nodes.filter((node) => matches.has(node.id));
-    const firstMatch = matchingNodes[0];
-    if (!firstMatch) return;
-    setEnabledNodeTypes((current) => {
-      if (current.has(firstMatch.type)) return current;
-      return new Set(current).add(firstMatch.type);
-    });
-    setSelectedId(firstMatch.id);
-    window.requestAnimationFrame(() => fitView({ nodes: [{ id: firstMatch.id }], padding: 0.7, duration: 250 }));
-  }, [fitView, graph, matches, query]);
-
-  renderStateRef.current = {
-    selectedId: selectedId ?? hoveredId,
-    hoveredId,
-    query,
-    zoom,
-    matches,
-    neighbors,
-    visibleNodeIds,
-    degrees,
-  };
-  pausedRef.current = paused;
-  cursorPhysicsRef.current = cursorPhysics;
-
-  const requestRender = useCallback(() => {
-    if (frameRef.current !== null) return;
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = null;
-      const {
-        selectedId: selected,
-        hoveredId: hovered,
-        query: search,
-        zoom: currentZoom,
-        matches: currentMatches,
-        neighbors: currentNeighbors,
-        visibleNodeIds: currentVisibleNodeIds,
-        degrees: currentDegrees,
-      } = renderStateRef.current;
-      const term = search.trim();
-      const labelIds = chooseLabelIds(
-        simNodesRef.current,
-        currentVisibleNodeIds,
-        currentNeighbors,
-        currentMatches,
-        selected,
-        hovered,
-        currentDegrees,
-        currentZoom,
-      );
-      setNodes(simNodesRef.current.map((node) => {
-        const isRelated = !selected || currentNeighbors.has(node.id);
-        const isMatch = !term || currentMatches.has(node.id);
-        const radius = node.type === "file" ? 13 : 5 + Math.min(5, currentDegrees.get(node.id) ?? 0);
-        return {
-          id: node.id,
-          type: "dot",
-          data: {
-            label: nodeLabel(node),
-            kind: node.kind ?? node.type,
-            color: colorForNode(node),
-            radius,
-            showLabel: labelIds.has(node.id) && isRelated && isMatch,
-            selected: node.id === selected,
-          },
-          position: { x: node.x, y: node.y },
-          draggable: true,
-          hidden: !currentVisibleNodeIds.has(node.id),
-          className: isRelated && isMatch ? "opacity-100" : "opacity-20",
-        };
-      }));
-    });
-  }, []);
-
-  const renderEdges = useCallback(() => {
-    setEdges(activeEdges.map((edge, index) => {
-      const focusId = hoveredId ?? selectedId;
-      const connected = !focusId || edge.source === focusId || edge.target === focusId;
-      const glowingImport = edge.type === "import" && Boolean(focusId) && connected;
-      return {
-        id: `${edge.source}-${edge.target}-${edge.type}-${index}`,
-        source: edge.source,
-        target: edge.target,
-        label: zoom > 1.25 && connected ? edge.type.toUpperCase() : undefined,
-        animated: glowingImport && !paused,
-        className: glowingImport ? "epilyse-import-edge" : undefined,
-        style: {
-          stroke: relationshipColors[edge.type],
-          strokeWidth: glowingImport ? 3.2 : connected ? 1.8 : 1,
-          opacity: glowingImport ? 1 : connected ? 0.72 : 0.12,
-        },
-        labelStyle: { fill: relationshipColors[edge.type], fontSize: 9, fontWeight: 700 },
-      };
-    }));
-  }, [activeEdges, hoveredId, paused, selectedId, zoom]);
-
-  const architectureSignature = useMemo(
-    () => `${Array.from(visibleNodeIds).sort().join("|")}::${activeEdges.map((edge) => `${edge.source}-${edge.target}-${edge.type}`).sort().join("|")}`,
-    [activeEdges, visibleNodeIds],
+  const selectedNode = allNodes.find((n) => n.id === selectedId) ?? null;
+  const selectedRelationships = allEdges.filter(
+    (e) => e.source === selectedId || e.target === selectedId,
   );
 
-  // This effect is intentionally keyed only by the visible graph signature.
-  // Search, selection, zoom, and cursor movement never recreate physics.
+  // Initialize glow sprites and reduced motion detection
   useEffect(() => {
-    const positions = positionsRef.current;
-    simulationRef.current?.stop();
-    simNodesRef.current = [];
-    nodeMapRef.current.clear();
-    setSettled(false);
-    if (!graph || visibleNodeIds.size === 0) {
-      setNodes([]);
-      setEdges([]);
+    glowSpritesRef.current = createGlowSprites();
+    reducedMotionRef.current = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+  }, []);
+
+  // Persist sidebar prefs
+  useEffect(() => {
+    const saved = window.localStorage.getItem("epilyse-graph-sidebar");
+    if (!saved) return;
+    try {
+      const value = JSON.parse(saved) as {
+        width?: number;
+        dock?: "left" | "right";
+        collapsed?: boolean;
+      };
+      if (typeof value.width === "number")
+        setSidebarWidth(Math.min(380, Math.max(220, value.width)));
+      if (value.dock === "left" || value.dock === "right") setDock(value.dock);
+      if (typeof value.collapsed === "boolean")
+        setSidebarCollapsed(value.collapsed);
+    } catch {
+      window.localStorage.removeItem("epilyse-graph-sidebar");
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      "epilyse-graph-sidebar",
+      JSON.stringify({ width: sidebarWidth, dock, collapsed: sidebarCollapsed }),
+    );
+  }, [dock, sidebarCollapsed, sidebarWidth]);
+
+  // Mark dirty when relevant state changes
+  useEffect(() => {
+    dirtyRef.current = true;
+  }, [selectedId, query, enabledRelationships, enabledNodeTypes]);
+
+  // ── Simulation ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (visibleNodes.length === 0) {
+      simRef.current = null;
+      dirtyRef.current = true;
       return;
     }
-    const sourceNodes = graph.nodes.filter((node) => visibleNodeIds.has(node.id));
-    const simulationNodes = sourceNodes.map((node, index) => {
-      const saved = positionsRef.current.get(node.id) ?? deterministicPosition(index, sourceNodes.length);
-      const simulationNode = { ...node, ...saved };
-      simNodesRef.current.push(simulationNode);
-      nodeMapRef.current.set(node.id, simulationNode);
-      return simulationNode;
-    });
-    const links: SimulationLink[] = activeEdges.map((edge) => ({
-      source: edge.source,
-      target: edge.target,
-      type: edge.type,
-    }));
-    const pointerForce = (alpha: number) => {
-      const pointer = pointerRef.current;
-      if (!pointer || pausedRef.current || !cursorPhysicsRef.current) return;
-      simNodesRef.current.forEach((node) => {
-        const dx = node.x - pointer.x;
-        const dy = node.y - pointer.y;
-        const distance = Math.sqrt(dx * dx + dy * dy) || 1;
-        if (distance < 95) {
-              const strength = ((95 - distance) / 95) * Math.min(alpha, 0.04) * 0.12;
-          node.vx = (node.vx ?? 0) + (dx / distance) * strength;
-          node.vy = (node.vy ?? 0) + (dy / distance) * strength;
-        }
-      });
+
+    const onTick = () => {
+      dirtyRef.current = true;
     };
-    const boundsForce = () => {
-      const width = Math.max(500, (graphRef.current?.clientWidth ?? 900) / 1.1);
-      const height = Math.max(420, (graphRef.current?.clientHeight ?? 650) / 1.1);
-      const xLimit = width / 2;
-      const yLimit = height / 2;
-      simNodesRef.current.forEach((node) => {
-        if (node.x < -xLimit) node.vx = Math.max(node.vx ?? 0, (-xLimit - node.x) * 0.08);
-        if (node.x > xLimit) node.vx = Math.min(node.vx ?? 0, (xLimit - node.x) * 0.08);
-        if (node.y < -yLimit) node.vy = Math.max(node.vy ?? 0, (-yLimit - node.y) * 0.08);
-        if (node.y > yLimit) node.vy = Math.min(node.vy ?? 0, (yLimit - node.y) * 0.08);
-      });
-    };
-    const simulation = forceSimulation<SimulationNode>(simulationNodes)
-      .force("link", forceLink<SimulationNode, SimulationLink>(links)
-        .id((node) => node.id)
-        .distance((link) => link.type === "import" ? 190 : 120)
-        .strength(0.42))
-      .force("charge", forceManyBody<SimulationNode>().strength(-300).distanceMax(850))
-      .force("collision", forceCollide<SimulationNode>().radius((node) => node.type === "file" ? 32 : 24).strength(0.9))
-      .force("center", forceCenter(0, 0).strength(0.05))
-      .force("x", forceX(0).strength(0.018))
-      .force("y", forceY(0).strength(0.018))
-      .force("pointer", pointerForce)
-      .force("bounds", boundsForce)
-      .velocityDecay(0.62)
-      .alphaDecay(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0.2 : 0.04)
-      .on("tick", requestRender)
-      .on("end", () => {
-        simNodesRef.current.forEach((node) => positionsRef.current.set(node.id, { x: node.x, y: node.y }));
-        setSettled(true);
-        requestRender();
-      });
-    simulationRef.current = simulation;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      simulation.tick(100).stop();
+    const onEnd = () => {
       setSettled(true);
-    } else if (!paused) {
-      simulation.restart();
-    }
-    renderEdges();
-    requestRender();
-    return () => {
-      simulationNodes.forEach((node) => positions.set(node.id, { x: node.x, y: node.y }));
-      simulation.stop();
-      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      const sim = simRef.current;
+      if (sim) {
+        for (const node of sim.layoutNodes) {
+          savedPositionsRef.current.set(node.id, { x: node.x, y: node.y });
+        }
+      }
+      dirtyRef.current = true;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [architectureSignature, graph, requestRender]);
 
-  useEffect(() => {
-    const simulation = simulationRef.current;
-    if (!simulation) return;
-    const linkForce = simulation.force("link") as ReturnType<typeof forceLink<SimulationNode, SimulationLink>> | undefined;
-    linkForce?.links(activeEdges.map((edge) => ({ source: edge.source, target: edge.target, type: edge.type })));
-    renderEdges();
-    requestRender();
-  }, [activeEdges, renderEdges, requestRender]);
-
-  useEffect(() => {
-    requestRender();
-  }, [hoveredId, query, requestRender, selectedId, zoom]);
-
-  useEffect(() => {
-    if (paused) simulationRef.current?.stop();
-    else simulationRef.current?.alphaTarget(0).restart();
-  }, [paused]);
-
-  useEffect(() => {
-    if (cursorPhysics && !paused) {
-      simulationRef.current?.alpha(Math.max(simulationRef.current.alpha(), 0.04)).restart();
-    }
-  }, [cursorPhysics, paused]);
-
-  const resetLayout = useCallback(() => {
-    const simulation = simulationRef.current;
-    if (!simulation) return;
-    positionsRef.current.clear();
-    simNodesRef.current.forEach((node, index, all) => {
-      const position = deterministicPosition(index, all.length);
-      node.x = position.x;
-      node.y = position.y;
-      node.vx = 0;
-      node.vy = 0;
+    const result = createSimulation({
+      nodes: visibleNodes,
+      edges: activeEdges,
+      clusterMap: clusterIndexMap,
+      degrees,
+      savedPositions: savedPositionsRef.current,
+      reducedMotion: reducedMotionRef.current,
+      onTick,
+      onEnd,
     });
+
+    simRef.current = result;
     setSettled(false);
-    simulation.alpha(0.8).restart();
-    window.setTimeout(() => fitView({ padding: 0.25, duration: 350 }), 350);
-  }, [fitView]);
+    dirtyRef.current = true;
 
-  const setPinnedPosition = useCallback((node: Node) => {
-    const simulationNode = nodeMapRef.current.get(node.id);
-    if (!simulationNode) return;
-    simulationNode.fx = node.position.x;
-    simulationNode.fy = node.position.y;
-  }, []);
-  const startDrag: OnNodeDrag = useCallback((_, node) => {
-    setPinnedPosition(node);
-    simulationRef.current?.alphaTarget(0.12).restart();
-  }, [setPinnedPosition]);
-  const moveDrag: OnNodeDrag = useCallback((_, node) => setPinnedPosition(node), [setPinnedPosition]);
-  const stopDrag: OnNodeDrag = useCallback((_, node) => {
-    setPinnedPosition(node);
-    const simulationNode = nodeMapRef.current.get(node.id);
-    if (simulationNode) {
-      simulationNode.fx = null;
-      simulationNode.fy = null;
+    // Fit camera after initial settle
+    if (!reducedMotionRef.current) {
+      setTimeout(() => {
+        fitCamera();
+      }, 800);
+    } else {
+      fitCamera();
     }
-    simulationRef.current?.alphaTarget(0).restart();
-  }, [setPinnedPosition]);
-  const pointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    pointerRef.current = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-  }, [screenToFlowPosition]);
 
+    return () => {
+      for (const node of result.layoutNodes) {
+        savedPositionsRef.current.set(node.id, { x: node.x, y: node.y });
+      }
+      result.simulation.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleNodes.length, activeEdges.length, clusterIndexMap]);
+
+  // ── Camera ───────────────────────────────────────────────────────
+  const fitCamera = useCallback(() => {
+    const sim = simRef.current;
+    if (!sim || sim.layoutNodes.length === 0) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const node of sim.layoutNodes) {
+      if (node.x < minX) minX = node.x;
+      if (node.x > maxX) maxX = node.x;
+      if (node.y < minY) minY = node.y;
+      if (node.y > maxY) maxY = node.y;
+    }
+
+    const padding = INTERACTION.focusPadding;
+    const graphWidth = (maxX - minX) || 200;
+    const graphHeight = (maxY - minY) || 200;
+    const zoom = Math.min(
+      canvas.width / (graphWidth * padding),
+      canvas.height / (graphHeight * padding),
+      2.0,
+    );
+
+    cameraRef.current = {
+      x: (minX + maxX) / 2,
+      y: (minY + maxY) / 2,
+      zoom: Math.max(0.15, zoom),
+    };
+    dirtyRef.current = true;
+  }, []);
+
+  const focusNode = useCallback((nodeId: string) => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const node = sim.nodeMap.get(nodeId);
+    if (!node) return;
+
+    cameraRef.current = {
+      x: node.x,
+      y: node.y,
+      zoom: Math.max(cameraRef.current.zoom, 1.0),
+    };
+    dirtyRef.current = true;
+  }, []);
+
+  // ── Search: fly to first match ───────────────────────────────────
   useEffect(() => {
-    const observer = new ResizeObserver(() => requestRender());
-    if (graphRef.current) observer.observe(graphRef.current);
-    return () => observer.disconnect();
-  }, [requestRender]);
+    if (matches.size === 0) return;
+    const firstMatchId = Array.from(matches).sort()[0];
+    if (!firstMatchId) return;
+    setSelectedId(firstMatchId);
+    focusNode(firstMatchId);
+  }, [matches, focusNode]);
 
-  const toggleSet = <T extends string>(setter: React.Dispatch<React.SetStateAction<Set<T>>>, value: T) => {
+  // ── Render loop ──────────────────────────────────────────────────
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const loop = () => {
+      rafRef.current = requestAnimationFrame(loop);
+      const now = performance.now();
+      const dt = Math.min(now - lastFrameRef.current, 50);
+      lastFrameRef.current = now;
+
+      const sim = simRef.current;
+      const interaction = interactionRef.current;
+
+      // Update interaction
+      updateCursorSmooth(interaction);
+      updateHover(interaction, spatialGridRef.current, cameraRef.current);
+      const allNodeIds = sim?.layoutNodes.map((n) => n.id) ?? [];
+      updateDimProgress(interaction, allNodeIds, dt);
+      updateParticles(interaction, dt);
+      cleanRipples(interaction, now);
+
+      // Check if anything is animating
+      const isAnimating =
+        interaction.cursor !== null ||
+        interaction.ripples.length > 0 ||
+        interaction.particles.length > 0 ||
+        !settled ||
+        Array.from(interaction.dimProgress.values()).some(
+          (v) => v > 0.01 && v < 0.99,
+        );
+
+      if (!dirtyRef.current && !isAnimating) return;
+      dirtyRef.current = false;
+
+      // Resize canvas
+      const dpr = window.devicePixelRatio ?? 1;
+      const rect = canvas.getBoundingClientRect();
+      const width = rect.width * dpr;
+      const height = rect.height * dpr;
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // Rebuild spatial grid
+      if (sim) {
+        spatialGridRef.current.rebuild(
+          sim.layoutNodes
+            .filter((n) => visibleNodeIds.has(n.id))
+            .map((n) => ({
+              id: n.id,
+              x: n.x,
+              y: n.y,
+              radius: n.radius,
+            })),
+        );
+      }
+
+      // Build neighbor set
+      const focusId = interaction.hoveredId ?? interaction.selectedId;
+      interaction.neighborIds = buildNeighborSet(focusId, activeEdges);
+
+      // Spawn particles on focus change
+      spawnParticles(interaction, renderEdges);
+
+      // Near-cursor node IDs
+      const nearCursorIds = new Set<string>();
+      if (interaction.cursor) {
+        const nearby = spatialGridRef.current.queryRadius(
+          interaction.cursor.smoothX,
+          interaction.cursor.smoothY,
+          140 / cameraRef.current.zoom,
+        );
+        for (const p of nearby) nearCursorIds.add(p.id);
+      }
+
+      // Label placement
+      const layoutNodes = sim?.layoutNodes ?? [];
+      const labelNodes = layoutNodes.map((n) => ({
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        label: nodeLabel(n),
+        radius: n.radius,
+        visible: visibleNodeIds.has(n.id),
+        dimmed: (interaction.dimProgress.get(n.id) ?? 0) > 0.5,
+      }));
+
+      const candidates = buildLabelCandidates(
+        labelNodes,
+        interaction.selectedId,
+        interaction.hoveredId,
+        nearCursorIds,
+        topDegreeIds,
+        interaction.neighborIds,
+        degrees,
+      );
+      const labels = placeLabels(candidates, cameraRef.current.zoom, prevLabelsRef.current);
+      prevLabelsRef.current = new Set(labels.map((l) => l.id));
+
+      // Build render state
+      const state: RenderState = {
+        nodes: layoutNodes,
+        edges: renderEdges,
+        labels,
+        camera: cameraRef.current,
+        cursor: interaction.cursor,
+        hoveredId: interaction.hoveredId,
+        selectedId: interaction.selectedId,
+        neighborIds: interaction.neighborIds,
+        nodeCommunityMap,
+        degrees,
+        ripples: interaction.ripples,
+        particles: interaction.particles,
+        dimProgress: interaction.dimProgress,
+        highlightedEdgeIndices: interaction.highlightedEdgeIndices,
+        settled,
+        reducedMotion: reducedMotionRef.current,
+        visibleNodeIds,
+        glowSprites: glowSpritesRef.current,
+        dimmedNodeIds: new Set(
+          allNodeIds.filter((id) => (interaction.dimProgress.get(id) ?? 0) > 0.5),
+        ),
+      };
+
+      renderFrame(ctx, state, rect.width, rect.height, now);
+    };
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [
+    activeEdges,
+    degrees,
+    nodeCommunityMap,
+    renderEdges,
+    settled,
+    topDegreeIds,
+    visibleNodeIds,
+  ]);
+
+  // ── Pointer handlers ─────────────────────────────────────────────
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const world = screenToWorld(sx, sy, cameraRef.current, rect.width, rect.height);
+
+      if (isPanningRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        cameraRef.current = {
+          ...cameraRef.current,
+          x: panStartRef.current.camX - dx / cameraRef.current.zoom,
+          y: panStartRef.current.camY - dy / cameraRef.current.zoom,
+        };
+        dirtyRef.current = true;
+        return;
+      }
+
+      // Drag node
+      const interaction = interactionRef.current;
+      if (interaction.isDragging && interaction.dragNodeId) {
+        const sim = simRef.current;
+        if (sim) {
+          const node = sim.nodeMap.get(interaction.dragNodeId);
+          if (node) {
+            node.fx = world.x;
+            node.fy = world.y;
+            node.x = world.x;
+            node.y = world.y;
+            sim.simulation.alpha(0.1).restart();
+            dirtyRef.current = true;
+          }
+        }
+        return;
+      }
+
+      setCursorTarget(interaction, world.x, world.y);
+      dirtyRef.current = true;
+    },
+    [],
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const world = screenToWorld(sx, sy, cameraRef.current, rect.width, rect.height);
+
+      const interaction = interactionRef.current;
+
+      // Check if clicking a node
+      const nearest = spatialGridRef.current.nearest(
+        world.x,
+        world.y,
+        INTERACTION.hitRadius / cameraRef.current.zoom,
+      );
+
+      if (nearest) {
+        // Start dragging
+        interaction.isDragging = true;
+        interaction.dragNodeId = nearest.id;
+        const sim = simRef.current;
+        if (sim) {
+          const node = sim.nodeMap.get(nearest.id);
+          if (node) {
+            node.fx = node.x;
+            node.fy = node.y;
+            sim.simulation.alphaTarget(LAYOUT.reheatAlpha).restart();
+          }
+        }
+        canvas.setPointerCapture(e.pointerId);
+      } else {
+        // Start panning
+        isPanningRef.current = true;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          camX: cameraRef.current.x,
+          camY: cameraRef.current.y,
+        };
+        canvas.setPointerCapture(e.pointerId);
+      }
+    },
+    [],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const world = screenToWorld(sx, sy, cameraRef.current, rect.width, rect.height);
+
+      const interaction = interactionRef.current;
+
+      if (interaction.isDragging && interaction.dragNodeId) {
+        const sim = simRef.current;
+        if (sim) {
+          const node = sim.nodeMap.get(interaction.dragNodeId);
+          if (node) {
+            node.fx = null;
+            node.fy = null;
+            sim.simulation.alphaTarget(0).restart();
+          }
+        }
+
+        // If we didn't move much, treat as click
+        const draggedNode = simRef.current?.nodeMap.get(interaction.dragNodeId);
+        if (draggedNode) {
+          const community = nodeCommunityMap.get(interaction.dragNodeId);
+          interaction.selectedId = interaction.dragNodeId;
+          setSelectedId(interaction.dragNodeId);
+          addRipple(interaction, draggedNode.x, draggedNode.y, community?.color ?? "#6c8cff");
+        }
+
+        interaction.isDragging = false;
+        interaction.dragNodeId = null;
+        canvas.releasePointerCapture(e.pointerId);
+        dirtyRef.current = true;
+        return;
+      }
+
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+        canvas.releasePointerCapture(e.pointerId);
+
+        // If didn't move much, treat as pane click (deselect)
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
+          interaction.selectedId = null;
+          setSelectedId(null);
+          dirtyRef.current = true;
+        }
+        return;
+      }
+    },
+    [nodeCommunityMap],
+  );
+
+  const handlePointerLeave = useCallback(() => {
+    clearCursor(interactionRef.current);
+    dirtyRef.current = true;
+  }, []);
+
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+
+    const camera = cameraRef.current;
+    const worldBefore = screenToWorld(sx, sy, camera, rect.width, rect.height);
+
+    const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08;
+    const newZoom = Math.max(0.1, Math.min(4, camera.zoom * zoomFactor));
+
+    // Zoom toward cursor
+    const worldAfter = screenToWorld(sx, sy, { ...camera, zoom: newZoom }, rect.width, rect.height);
+    cameraRef.current = {
+      x: camera.x + (worldBefore.x - worldAfter.x),
+      y: camera.y + (worldBefore.y - worldAfter.y),
+      zoom: newZoom,
+    };
+    dirtyRef.current = true;
+  }, []);
+
+  // ── Keyboard ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const sim = simRef.current;
+      if (!sim) return;
+      const handled = handleKeyboard(
+        e,
+        interactionRef.current,
+        sim.layoutNodes,
+        renderEdges,
+        (id) => {
+          setSelectedId(id);
+          dirtyRef.current = true;
+        },
+        focusNode,
+      );
+      if (handled) {
+        dirtyRef.current = true;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [renderEdges, focusNode]);
+
+  // ── Toggle helpers ───────────────────────────────────────────────
+  const toggleSet = <T extends string>(
+    setter: React.Dispatch<React.SetStateAction<Set<T>>>,
+    value: T,
+  ) => {
     setter((current) => {
       const next = new Set(current);
       if (next.has(value)) next.delete(value);
@@ -575,33 +682,16 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     });
   };
 
-  const toggleFileSymbols = (path: string) => {
-    const isExpanded = expandedFiles.has(path);
-    setExpandedFiles((current) => {
-      const next = new Set(current);
-      if (isExpanded) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-    if (!isExpanded) {
-      // Symbol visibility remains controlled by the sidebar checkbox.
-      // Expanding a file only marks its scope for progressive exploration.
+  const resetLayout = useCallback(() => {
+    savedPositionsRef.current.clear();
+    const sim = simRef.current;
+    if (sim) {
+      sim.simulation.alpha(0.8).restart();
+      setTimeout(() => fitCamera(), 500);
     }
-  };
+  }, [fitCamera]);
 
-  const toggleFullscreen = async () => {
-    if (!graphRef.current) return;
-    setFullscreenError(null);
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else if (graphRef.current.requestFullscreen) await graphRef.current.requestFullscreen();
-      else setFullscreenError("Fullscreen is not supported by this browser.");
-    } catch {
-      setFullscreenError("Fullscreen could not be enabled.");
-    }
-  };
-
-  const resizeSidebar = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const resizeSidebar = (event: React.PointerEvent<HTMLDivElement>) => {
     const startX = event.clientX;
     const startWidth = sidebarWidth;
     const onMove = (moveEvent: globalThis.PointerEvent) => {
@@ -616,77 +706,402 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     window.addEventListener("pointerup", onUp);
   };
 
-  const selectedRelationships = allEdges.filter((edge) => edge.source === selectedId || edge.target === selectedId);
-  const communities = useMemo(() => {
-    const counts = new Map<string, number>();
-    graph?.nodes
-      .filter((node) => node.type === "symbol" && node.name)
-      .forEach((node) => {
-        const name = node.name?.split(".")[0] ?? "symbols";
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-      });
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 16);
-  }, [graph]);
+  const focusCommunity = useCallback(
+    (community: Community) => {
+      if (!simRef.current) return;
+      const nodes = simRef.current.layoutNodes.filter((n) =>
+        community.nodeIds.has(n.id),
+      );
+      if (nodes.length === 0) return;
+
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const node of nodes) {
+        if (node.x < minX) minX = node.x;
+        if (node.x > maxX) maxX = node.x;
+        if (node.y < minY) minY = node.y;
+        if (node.y > maxY) maxY = node.y;
+      }
+
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const graphWidth = (maxX - minX) || 200;
+      const graphHeight = (maxY - minY) || 200;
+      const zoom = Math.min(
+        rect.width / (graphWidth * 1.8),
+        rect.height / (graphHeight * 1.8),
+        2.0,
+      );
+
+      cameraRef.current = {
+        x: (minX + maxX) / 2,
+        y: (minY + maxY) / 2,
+        zoom: Math.max(0.2, zoom),
+      };
+      dirtyRef.current = true;
+    },
+    [],
+  );
+
+  // ── Sidebar ──────────────────────────────────────────────────────
   const sidebar = (
-    <aside style={{ width: sidebarCollapsed ? 48 : sidebarWidth }} className={`relative shrink-0 ${dock === "left" ? "border-r" : "border-l"} border-slate-800 bg-slate-900/95 transition-[width]`}>
-      <div className="flex items-center justify-between border-b border-slate-800 p-3">
-        {!sidebarCollapsed && <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Communities</span>}
-        <button type="button" onClick={() => setSidebarCollapsed((value) => !value)} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white" aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? "›" : "‹"}</button>
+    <aside
+      style={{
+        width: sidebarCollapsed ? 48 : sidebarWidth,
+        background: "var(--graph-sidebar-bg)",
+        borderColor: "var(--graph-sidebar-border)",
+        backdropFilter: `blur(var(--graph-glass-blur))`,
+        WebkitBackdropFilter: `blur(var(--graph-glass-blur))`,
+      }}
+      className={`graph-sidebar relative shrink-0 ${
+        dock === "left" ? "border-r" : "border-l"
+      } transition-[width] duration-200`}
+    >
+      <div className="graph-sidebar-header flex items-center justify-between border-b p-3"
+        style={{ borderColor: "var(--graph-sidebar-border)" }}
+      >
+        {!sidebarCollapsed && (
+          <span className="graph-sidebar-title text-[11px] font-bold uppercase tracking-[0.16em]"
+            style={{ color: "rgba(160,170,200,0.7)" }}
+          >
+            Explorer
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => setSidebarCollapsed((v) => !v)}
+          className="graph-btn-collapse rounded p-1 transition-colors hover:bg-white/5"
+          style={{ color: "rgba(160,170,200,0.6)" }}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {sidebarCollapsed ? "›" : "‹"}
+        </button>
       </div>
+
       {!sidebarCollapsed && (
-        <div className="space-y-5 overflow-y-auto p-4 text-xs text-slate-300">
-          <label className="block"><span className="mb-2 block font-semibold text-slate-400">Search code</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Path, class, function…" className="w-full rounded-md border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-white outline-none ring-orange-300 placeholder:text-slate-600 focus:ring-2" /></label>
-          <fieldset><legend className="mb-2 font-semibold text-slate-400">Node categories</legend>{(["file", "symbol"] as NodeCategory[]).map((type) => <label key={type} className="mb-2 flex items-center gap-2"><input type="checkbox" checked={enabledNodeTypes.has(type)} onChange={() => toggleSet(setEnabledNodeTypes, type)} className="h-4 w-4 accent-sky-400" /><i className="h-2.5 w-2.5 rounded-full" style={{ background: nodeColors[type] }} />{type === "symbol" ? "Classes & functions" : "Files"}</label>)}</fieldset>
-          <fieldset><legend className="mb-2 font-semibold text-slate-400">Relationships</legend>{relationshipTypes.map((type) => <label key={type} className="mb-2 flex items-center gap-2"><input type="checkbox" checked={enabledRelationships.has(type)} onChange={() => toggleSet(setEnabledRelationships, type)} className="accent-orange-400" /><i className="h-0.5 w-3" style={{ background: relationshipColors[type] }} />{type.toUpperCase()}</label>)}</fieldset>
-          {communities.length > 0 && <fieldset className="border-t border-slate-800 pt-4"><legend className="mb-2 font-semibold uppercase tracking-[0.1em] text-slate-400">Communities</legend><label className="mb-3 flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" checked={enabledNodeTypes.has("symbol")} onChange={() => toggleSet<NodeCategory>(setEnabledNodeTypes, "symbol")} className="h-4 w-4 accent-sky-400" />Select all symbols</label>{communities.map(([name, count], index) => <button type="button" key={name} onClick={() => { setQuery(name); setEnabledNodeTypes((current) => new Set<NodeCategory>(current).add("symbol")); }} className="flex w-full items-center gap-2 py-1 text-left text-slate-300 hover:text-white"><span className="h-3 w-3 rounded-full" style={{ background: Object.values(symbolKindColors)[index % 3] }} /><span className="min-w-0 flex-1 truncate">{name}</span><span className="text-slate-500">{count}</span></button>)}</fieldset>}
-          <div className="border-t border-slate-800 pt-4"><p className="mb-2 font-semibold text-slate-400">View</p><button type="button" onClick={() => setDock((value) => value === "left" ? "right" : "left")} className="mr-2 rounded border border-slate-700 px-2 py-1.5 text-slate-300 hover:bg-slate-800">Dock {dock === "left" ? "right" : "left"}</button><button type="button" onClick={() => setCursorPhysics((value) => !value)} className={`rounded border px-2 py-1.5 ${cursorPhysics ? "border-teal-400/60 text-teal-200" : "border-slate-700 text-slate-300"}`}>{cursorPhysics ? "Cursor physics on" : "Cursor physics off"}</button><p className="mt-3 text-slate-500">{selectedId ? "Connected nodes are highlighted." : "Architecture overview shows files and imports."}</p></div>
-          <div className="border-t border-slate-800 pt-4"><p className="mb-2 font-semibold text-slate-400">Legend</p><p className="mb-1 text-slate-500">Nodes</p><p className="flex items-center gap-2"><i className="h-3 w-3 rounded-full bg-[#334155]" />Files / modules</p><p className="flex items-center gap-2"><i className="h-2 w-2 rounded-full bg-[#d78b68]" />Symbols</p><p className="mb-1 mt-3 text-slate-500">Edges</p>{relationshipTypes.map((type) => <p key={type} className="flex items-center gap-2"><i className="h-0.5 w-3" style={{ background: relationshipColors[type] }} />{type.toUpperCase()}</p>)}</div>
+        <div className="graph-sidebar-content space-y-5 overflow-y-auto p-4 text-xs"
+          style={{ color: "rgba(200,210,230,0.8)", maxHeight: "calc(100% - 48px)" }}
+        >
+          {/* Search */}
+          <label className="block">
+            <span className="graph-label mb-2 block font-semibold"
+              style={{ color: "rgba(160,170,200,0.6)" }}
+            >
+              Search code
+            </span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Path, class, function…"
+              className="graph-search-input w-full rounded-lg px-3 py-2 text-xs outline-none transition-all focus:ring-2"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "rgba(220,225,240,0.92)",
+                caretColor: "#6c8cff",
+              }}
+            />
+          </label>
+
+          {/* Node categories */}
+          <fieldset>
+            <legend className="graph-label mb-2 font-semibold"
+              style={{ color: "rgba(160,170,200,0.6)" }}
+            >
+              Node categories
+            </legend>
+            {(["file", "symbol"] as NodeCategory[]).map((type) => (
+              <label key={type} className="mb-2 flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enabledNodeTypes.has(type)}
+                  onChange={() => toggleSet(setEnabledNodeTypes, type)}
+                  className="graph-checkbox h-3.5 w-3.5 rounded"
+                  style={{ accentColor: "#6c8cff" }}
+                />
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{
+                    background: type === "file" ? CLUSTER_PALETTE[0] : CLUSTER_PALETTE[1],
+                  }}
+                />
+                <span>{type === "symbol" ? "Classes & functions" : "Files"}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          {/* Relationships */}
+          <fieldset>
+            <legend className="graph-label mb-2 font-semibold"
+              style={{ color: "rgba(160,170,200,0.6)" }}
+            >
+              Relationships
+            </legend>
+            {(["import", "contains", "calls"] as RelationshipType[]).map((type) => (
+              <label key={type} className="mb-2 flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enabledRelationships.has(type)}
+                  onChange={() => toggleSet(setEnabledRelationships, type)}
+                  className="graph-checkbox"
+                  style={{ accentColor: EDGE_COLORS[type] }}
+                />
+                <span
+                  className="h-0.5 w-4 rounded"
+                  style={{ background: EDGE_COLORS[type] }}
+                />
+                <span className="uppercase tracking-wide">{type}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          {/* Communities */}
+          {communities.length > 0 && (
+            <fieldset
+              className="border-t pt-4"
+              style={{ borderColor: "rgba(255,255,255,0.06)" }}
+            >
+              <legend className="graph-label mb-3 font-semibold uppercase tracking-[0.1em]"
+                style={{ color: "rgba(160,170,200,0.6)" }}
+              >
+                Communities
+              </legend>
+              {communities.map((community) => (
+                <button
+                  type="button"
+                  key={community.id}
+                  onClick={() => focusCommunity(community)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5"
+                >
+                  <span
+                    className="h-3 w-3 rounded-full shrink-0"
+                    style={{ background: community.color }}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{community.name}</span>
+                  <span style={{ color: "rgba(160,170,200,0.4)" }}>
+                    {community.nodeCount}
+                  </span>
+                </button>
+              ))}
+            </fieldset>
+          )}
+
+          {/* View controls */}
+          <div
+            className="border-t pt-4 space-y-2"
+            style={{ borderColor: "rgba(255,255,255,0.06)" }}
+          >
+            <p className="graph-label font-semibold"
+              style={{ color: "rgba(160,170,200,0.6)" }}
+            >
+              View
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setDock((v) => (v === "left" ? "right" : "left"))}
+                className="graph-btn rounded-md px-2.5 py-1.5"
+              >
+                Dock {dock === "left" ? "right" : "left"}
+              </button>
+              <button
+                type="button"
+                onClick={resetLayout}
+                className="graph-btn rounded-md px-2.5 py-1.5"
+              >
+                Reset layout
+              </button>
+              <button
+                type="button"
+                onClick={fitCamera}
+                className="graph-btn rounded-md px-2.5 py-1.5"
+              >
+                Fit
+              </button>
+            </div>
+          </div>
+
+          {/* Legend */}
+          <div
+            className="border-t pt-4"
+            style={{ borderColor: "rgba(255,255,255,0.06)" }}
+          >
+            <p className="graph-label mb-2 font-semibold"
+              style={{ color: "rgba(160,170,200,0.6)" }}
+            >
+              Legend
+            </p>
+            <div className="space-y-1">
+              <p className="flex items-center gap-2">
+                <span className="h-3 w-3 rounded-full" style={{ background: CLUSTER_PALETTE[0] }} />
+                Files / modules
+              </p>
+              <p className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full" style={{ background: CLUSTER_PALETTE[1] }} />
+                Symbols
+              </p>
+            </div>
+            <div className="mt-3 space-y-1">
+              {(["import", "contains", "calls"] as RelationshipType[]).map((type) => (
+                <p key={type} className="flex items-center gap-2">
+                  <span className="h-0.5 w-4" style={{ background: EDGE_COLORS[type] }} />
+                  <span className="uppercase tracking-wide">{type}</span>
+                </p>
+              ))}
+            </div>
+          </div>
         </div>
       )}
-      {!sidebarCollapsed && <div onPointerDown={resizeSidebar} className={`absolute top-0 ${dock === "left" ? "-right-1" : "-left-1"} z-20 h-full w-2 cursor-col-resize`} aria-label="Resize graph sidebar" />}
+
+      {/* Resize handle */}
+      {!sidebarCollapsed && (
+        <div
+          onPointerDown={resizeSidebar}
+          className={`absolute top-0 ${
+            dock === "left" ? "-right-1" : "-left-1"
+          } z-20 h-full w-2 cursor-col-resize`}
+          aria-label="Resize graph sidebar"
+        />
+      )}
     </aside>
   );
 
-  return (
-    <div ref={graphRef} className="flex min-h-[700px] overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-2xl" style={{ flexDirection: dock === "right" ? "row-reverse" : "row" }}>
-      {sidebar}
-      <section className="min-w-0 flex-1">
-        <div className="flex h-12 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4">
-          <span className="text-xs text-slate-500">{visibleNodeIds.size} visible nodes · {activeEdges.length} visible edges{invalidEdges.length > 0 ? ` · ${invalidEdges.length} invalid` : ""}</span>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setPaused((value) => !value)} className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800">{paused ? "Resume" : "Pause"} physics</button>
-            <button type="button" onClick={resetLayout} className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800">Reset layout</button>
-            <button type="button" onClick={() => fitView({ padding: 0.25, duration: 350 })} className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800">Fit</button>
-            <button type="button" onClick={toggleFullscreen} className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800">{fullscreen ? "Exit full screen" : "Expand graph"}</button>
-            <span className="ml-2 text-[11px] text-slate-600">{settled ? "Settled" : paused ? "Paused" : "Physics active"}</span>
-          </div>
+  // ── Selected node info panel ─────────────────────────────────────
+  const infoPanel = selectedNode && (
+    <aside
+      className="graph-info-panel absolute right-4 top-4 z-10 w-64 rounded-xl p-4 shadow-2xl"
+      style={{
+        background: "var(--graph-sidebar-bg)",
+        border: "1px solid var(--graph-sidebar-border)",
+        backdropFilter: `blur(var(--graph-glass-blur))`,
+        WebkitBackdropFilter: `blur(var(--graph-glass-blur))`,
+      }}
+      aria-live="polite"
+    >
+      <p
+        className="text-[10px] font-bold uppercase tracking-[0.15em]"
+        style={{ color: "rgba(160,170,200,0.5)" }}
+      >
+        Selected node
+      </p>
+      <h2
+        className="mt-2 break-words text-sm font-bold"
+        style={{ color: "rgba(220,225,240,0.95)" }}
+      >
+        {nodeLabel(selectedNode)}
+      </h2>
+      <dl className="mt-3 space-y-2 text-xs">
+        <div className="flex justify-between gap-3">
+          <dt style={{ color: "rgba(160,170,200,0.5)" }}>Type</dt>
+          <dd style={{ color: "rgba(200,210,230,0.85)" }}>
+            {selectedNode.kind ?? selectedNode.type}
+          </dd>
         </div>
-        {invalidEdges.length > 0 && <p className="border-b border-amber-900/70 bg-amber-950/40 px-4 py-2 text-xs text-amber-200" role="status">Graph data contains {invalidEdges.length} edge{invalidEdges.length === 1 ? "" : "s"} with missing node endpoints; they are excluded from rendering.</p>}
-        {fullscreenError && <p className="border-b border-red-900/70 bg-red-950/40 px-4 py-2 text-xs text-red-200" role="alert">{fullscreenError}</p>}
-        <div className="relative h-[650px]" onPointerMove={pointerMove} onPointerLeave={() => { pointerRef.current = null; }}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            fitView
-            nodesDraggable
-            onNodeClick={(_, node) => setSelectedId(node.id)}
-            onNodeMouseEnter={(_, node) => setHoveredId(node.id)}
-            onNodeMouseLeave={() => setHoveredId(null)}
-            onNodeDragStart={startDrag}
-            onNodeDrag={moveDrag}
-            onNodeDragStop={stopDrag}
-            onMove={(_, viewport) => setZoom(viewport.zoom)}
-            onPaneClick={() => setSelectedId(null)}
-            aria-label="Interactive repository dependency graph"
+        <div className="flex justify-between gap-3">
+          <dt style={{ color: "rgba(160,170,200,0.5)" }}>Path</dt>
+          <dd
+            className="break-all text-right"
+            style={{ color: "rgba(200,210,230,0.7)" }}
           >
-            <Background color="#273449" gap={24} size={1} />
-            <Controls position="bottom-right" />
-            <MiniMap className="epilyse-minimap" nodeColor={(node) => node.data?.color as string ?? "#89a0b9"} maskColor="rgba(2, 6, 23, 0.78)" />
-          </ReactFlow>
-          {!graph && <div className="absolute inset-0 grid place-items-center text-center text-sm text-slate-500">Analyze a repository to explore its source-backed graph.</div>}
-          {graph?.nodes.length === 0 && <div className="absolute inset-0 grid place-items-center text-sm text-slate-500">No supported source nodes were found.</div>}
-          {selectedNode && <aside className="absolute right-4 top-4 z-10 w-64 rounded-lg border border-slate-700 bg-slate-900/95 p-4 shadow-2xl" aria-live="polite"><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-500">Selected node</p><h2 className="mt-2 break-words text-sm font-bold text-white">{nodeLabel(selectedNode)}</h2><dl className="mt-3 space-y-2 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Type</dt><dd className="text-slate-200">{selectedNode.kind ?? selectedNode.type}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Path</dt><dd className="break-all text-right text-slate-300">{selectedNode.path}</dd></div>{selectedNode.line !== null && <div className="flex justify-between gap-3"><dt className="text-slate-500">Lines</dt><dd className="text-slate-200">{selectedNode.line}–{selectedNode.end_line}</dd></div>}<div className="flex justify-between gap-3"><dt className="text-slate-500">Relationships</dt><dd className="text-slate-200">{selectedRelationships.length}</dd></div></dl>{selectedNode.type === "file" && <button type="button" onClick={() => toggleFileSymbols(selectedNode.path)} className="mt-4 w-full rounded border border-orange-400/40 px-2 py-1.5 text-xs font-semibold text-orange-200 hover:bg-orange-950/50">{expandedFiles.has(selectedNode.path) ? "Collapse symbols" : "Expand classes & functions"}</button>}</aside>}
+            {selectedNode.path}
+          </dd>
+        </div>
+        {selectedNode.line !== null && (
+          <div className="flex justify-between gap-3">
+            <dt style={{ color: "rgba(160,170,200,0.5)" }}>Lines</dt>
+            <dd style={{ color: "rgba(200,210,230,0.85)" }}>
+              {selectedNode.line}–{selectedNode.end_line}
+            </dd>
+          </div>
+        )}
+        <div className="flex justify-between gap-3">
+          <dt style={{ color: "rgba(160,170,200,0.5)" }}>Connections</dt>
+          <dd style={{ color: "rgba(200,210,230,0.85)" }}>
+            {selectedRelationships.length}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt style={{ color: "rgba(160,170,200,0.5)" }}>Community</dt>
+          <dd className="flex items-center gap-1.5" style={{ color: "rgba(200,210,230,0.85)" }}>
+            <span
+              className="h-2 w-2 rounded-full inline-block"
+              style={{ background: nodeCommunityMap.get(selectedId ?? "")?.color ?? "#6c8cff" }}
+            />
+            {nodeCommunityMap.get(selectedId ?? "")?.name ?? "—"}
+          </dd>
+        </div>
+      </dl>
+    </aside>
+  );
+
+  // ── Main render ──────────────────────────────────────────────────
+  return (
+    <div
+      ref={containerRef}
+      className="graph-container flex overflow-hidden rounded-2xl shadow-2xl"
+      style={{
+        ...CSS_VARS,
+        minHeight: 700,
+        flexDirection: dock === "right" ? "row-reverse" : "row",
+        border: "1px solid rgba(255,255,255,0.06)",
+        background: "var(--graph-bg)",
+      } as React.CSSProperties}
+    >
+      {sidebar}
+      <section className="min-w-0 flex-1 relative">
+        {/* Status bar */}
+        <div
+          className="graph-statusbar flex h-10 items-center justify-between px-4"
+          style={{
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+            background: "rgba(8,10,22,0.6)",
+          }}
+        >
+          <span className="text-[11px]" style={{ color: "rgba(160,170,200,0.4)" }}>
+            {visibleNodeIds.size} nodes · {activeEdges.length} edges
+            {communities.length > 0 ? ` · ${communities.length} clusters` : ""}
+          </span>
+          <span className="text-[11px]" style={{ color: "rgba(160,170,200,0.3)" }}>
+            {settled ? "Settled" : "Simulating…"} · zoom{" "}
+            {cameraRef.current.zoom.toFixed(1)}×
+          </span>
+        </div>
+
+        {/* Canvas */}
+        <div className="relative" style={{ height: "calc(100% - 40px)" }}>
+          <canvas
+            ref={canvasRef}
+            onPointerMove={handlePointerMove}
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerLeave}
+            onWheel={handleWheel}
+            className="graph-canvas block h-full w-full"
+            style={{ cursor: interactionRef.current.hoveredId ? "pointer" : "grab" }}
+            aria-label="Interactive repository dependency graph"
+            tabIndex={0}
+          />
+
+          {/* Empty states */}
+          {!graph && (
+            <div
+              className="absolute inset-0 grid place-items-center text-center text-sm"
+              style={{ color: "rgba(160,170,200,0.4)" }}
+            >
+              Analyze a repository to explore its source-backed graph.
+            </div>
+          )}
+          {graph && allNodes.length === 0 && (
+            <div
+              className="absolute inset-0 grid place-items-center text-sm"
+              style={{ color: "rgba(160,170,200,0.4)" }}
+            >
+              No supported source nodes were found.
+            </div>
+          )}
+
+          {/* Info panel */}
+          {infoPanel}
         </div>
       </section>
     </div>
@@ -694,5 +1109,5 @@ function ForceGraph({ graph }: GraphCanvasProps) {
 }
 
 export function GraphCanvas({ graph }: GraphCanvasProps) {
-  return <ReactFlowProvider><ForceGraph graph={graph} /></ReactFlowProvider>;
+  return <ForceGraph graph={graph} />;
 }
