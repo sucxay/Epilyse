@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Lock
 
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython 
@@ -7,6 +8,8 @@ from backend.app.parser.models import ParsedFile, ImportInfo, DefinitionInfo, Ca
 
 
 PYTHON_LANGUAGE = Language(tspython.language())
+_PARSER = Parser(PYTHON_LANGUAGE)
+_PARSER_LOCK = Lock()
 
 def get_language(language:str)->Language:
     """Return the Tree Sitter grammar for supported Language"""
@@ -18,8 +21,12 @@ def get_language(language:str)->Language:
 
 def parse_source(source: bytes, language: str):
     grammar = get_language(language)
-    parser = Parser(grammar)
-    return parser.parse(source)
+    if grammar is not PYTHON_LANGUAGE:
+        parser = Parser(grammar)
+        return parser.parse(source)
+
+    with _PARSER_LOCK:
+        return _PARSER.parse(source)
 
 
 def extract_imports(root_node , source:bytes) -> list[ImportInfo]:
@@ -134,6 +141,7 @@ def parse_files(file_path : str|Path , repo_root : str | Path )-> ParsedFile:
         path=relative_path, 
         language='python',
         has_errors=root_node.has_error,
+        source_code=source.decode("utf-8", errors="replace"),
         imports=extract_imports(root_node , source),
         definitions=extract_definition(root_node),
         calls=extract_calls(root_node , source)

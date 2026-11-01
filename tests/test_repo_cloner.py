@@ -1,33 +1,22 @@
 
-from backend.app.services.repo_cloner import shallow_checkout, run_git
+import pytest
+
+from backend.app.services.repo_cloner import validate_repo
 
 
-REPOSITORY_URL = "https://github.com/sucxay/sound-ai"
-COMMIT_SHA = "78a16c09c9ebf11648a8371997a8c997e0a6f5e2"
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://github.com/example/project",
+        "https://user:password@github.com/example/project",
+        "https://github.com/example/project?token=secret",
+        "https://github.com/example/project#fragment",
+    ],
+)
+def test_validate_repo_rejects_unsafe_urls(url: str):
+    with pytest.raises(ValueError):
+        validate_repo(url)
 
 
-def test_shallow_checkout():
-    with shallow_checkout(REPOSITORY_URL, COMMIT_SHA) as repo_path:
-        assert repo_path.exists()
-        assert (repo_path / ".git").exists()
-
-        actual_sha = run_git(
-            ["rev-parse", "HEAD"],
-            cwd=repo_path,
-        )
-
-        assert actual_sha == COMMIT_SHA
-
-        # Print a few tracked repository paths for inspection.
-        files = run_git(
-            ["ls-files"],
-            cwd=repo_path,
-        ).splitlines()
-
-        print("Checked out commit:", actual_sha)
-        print("Tracked files:", len(files))
-        print("Sample files:", files[:10])
-
-
-if __name__ == "__main__":
-    test_shallow_checkout()
+def test_validate_repo_accepts_https_github_url():
+    validate_repo("https://github.com/example/project.git")

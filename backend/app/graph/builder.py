@@ -9,6 +9,7 @@ Tree-sitter parser) and produces a collection of :class:`Node` and
 from __future__ import annotations
 
 from collections import defaultdict
+from hashlib import sha256
 from pathlib import PurePosixPath
 from typing import Iterable, Tuple
 
@@ -16,12 +17,55 @@ from backend.app.parser.models import ParsedFile
 from .models import Edge, Node
 
 
-def _file_node(pf: ParsedFile) -> Node:
+def _snapshot(source: str, start_line: int | None, end_line: int | None) -> str:
+    """Return the exact source range represented by a node."""
+    if start_line is None or end_line is None:
+        return ""
+    lines = source.splitlines(keepends=True)
+    return "".join(lines[max(start_line - 1, 0) : max(end_line, 0)])
+
+
+def _node_metadata(
+    source: str,
+    start_line: int | None,
+    end_line: int | None,
+    functions: list[str],
+    classes: list[str],
+    previous_reference: str | None,
+) -> dict[str, object]:
+    snapshot = _snapshot(source, start_line, end_line)
+    return {
+        "source_code": snapshot,
+        "start_line": start_line,
+        "functions": functions,
+        "classes": classes,
+        "code_hash": sha256(snapshot.encode("utf-8")).hexdigest(),
+        "previous_reference": previous_reference,
+    }
+
+
+def _file_node(pf: ParsedFile, previous_reference: str | None) -> Node:
     """Create a deterministic file node.
 
     ``id`` format: ``file:<path>`` where *path* is the repository-relative POSIX
     path stored in ``ParsedFile.path``.
     """
+    definitions = [
+        f"{definition.scope}.{definition.name}"
+        if definition.scope
+        else definition.name
+        for definition in pf.definitions
+    ]
+    source_lines = pf.source_code.splitlines()
+    end_line = len(source_lines) if source_lines else 0
+    functions = [
+        name
+        for name, definition in zip(definitions, pf.definitions)
+        if definition.kind in {"function", "method"}
+    ]
+    classes = [
+        name for name, definition in zip(definitions, pf.definitions) if definition.kind == "class"
+    ]
     return Node(
         id=f"file:{pf.path}",
         type="file",
@@ -29,11 +73,19 @@ def _file_node(pf: ParsedFile) -> Node:
         name=None,
         kind="file",
         line=None,
-        end_line=None,
+        end_line=end_line,
+        **_node_metadata(
+            pf.source_code,
+            1,
+            end_line,
+            functions,
+            classes,
+            previous_reference,
+        ),
     )
 
 
-def _symbol_node(pf: ParsedFile, d) -> Node:
+def _symbol_node(pf: ParsedFile, d, previous_reference: str | None) -> Node:
     """Create a deterministic symbol node.
 
     The fully qualified name is built from the optional ``scope`` and the
@@ -50,6 +102,14 @@ def _symbol_node(pf: ParsedFile, d) -> Node:
         kind=d.kind,  # type: ignore[arg-type]
         line=d.line,
         end_line=d.end_line,
+        **_node_metadata(
+            pf.source_code,
+            d.line,
+            d.end_line,
+            [full_name] if d.kind in {"function", "method"} else [],
+            [full_name] if d.kind == "class" else [],
+            previous_reference,
+        ),
     )
 
 
@@ -95,7 +155,10 @@ def _resolve_import_target(
     return file_lookup.get(PurePosixPath(last + ".py").as_posix())
 
 
-def build_graph(parsed_files: Iterable[ParsedFile]) -> Tuple[list[Node], list[Edge]]:
+def build_graph(
+    parsed_files: Iterable[ParsedFile],
+    previous_reference: str | None = None,
+) -> Tuple[list[Node], list[Edge]]:
     """Build a repository-wide graph.
 
     Returns a tuple ``(nodes, edges)`` where ``nodes`` is a list of
@@ -109,7 +172,7 @@ def build_graph(parsed_files: Iterable[ParsedFile]) -> Tuple[list[Node], list[Ed
     # ---------------------------------------------------------------------
     file_nodes: dict[str, Node] = {}
     for pf in parsed_files:
-        fn = _file_node(pf)
+        fn = _file_node(pf, previous_reference)
         file_nodes[pf.path] = fn
 
     # ---------------------------------------------------------------------
@@ -124,7 +187,7 @@ def build_graph(parsed_files: Iterable[ParsedFile]) -> Tuple[list[Node], list[Ed
 
     for pf in parsed_files:
         for d in pf.definitions:
-            sn = _symbol_node(pf, d)
+            sn = _symbol_node(pf, d, previous_reference)
             symbol_nodes.append(sn)
             symbol_ids.add(sn.id)
 

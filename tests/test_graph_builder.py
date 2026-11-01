@@ -7,7 +7,7 @@ condition is not satisfied – this follows the project's guideline of not
 using bare ``assert`` in test code.
 """
 
-from typing import List
+from hashlib import sha256
 
 import pytest
 
@@ -139,3 +139,53 @@ def test_unresolved_call_no_edge() -> None:
     _, edges = build_graph([parsed])
     call_edges = [e for e in edges if e.type == "calls"]
     _expect(len(call_edges) == 0, f"Expected no calls edges, got {len(call_edges)}")
+
+
+def test_nodes_include_source_snapshots_and_revision_metadata() -> None:
+    """File and symbol nodes expose their source-backed snapshot metadata."""
+    source = "class Example:\n    def run(self):\n        return 1\n"
+    parsed = ParsedFile(
+        path="example.py",
+        language="python",
+        has_errors=False,
+        source_code=source,
+        definitions=[
+            DefinitionInfo(
+                name="Example",
+                kind="class",
+                scope=None,
+                line=1,
+                end_line=3,
+            ),
+            DefinitionInfo(
+                name="run",
+                kind="method",
+                scope="Example",
+                line=2,
+                end_line=3,
+            ),
+        ],
+        imports=[],
+        calls=[],
+    )
+
+    nodes, _ = build_graph([parsed], previous_reference="previous-sha")
+    file_node = next(node for node in nodes if node.type == "file")
+    method_node = next(node for node in nodes if node.name == "Example.run")
+
+    _expect(file_node.source_code == source, "File source snapshot mismatch")
+    _expect(method_node.source_code == "    def run(self):\n        return 1\n", "Symbol snapshot mismatch")
+    _expect(file_node.start_line == 1 and file_node.end_line == 3, "File line range mismatch")
+    _expect(method_node.start_line == 2 and method_node.end_line == 3, "Symbol line range mismatch")
+    _expect(file_node.classes == ["Example"], "File class metadata mismatch")
+    _expect(file_node.functions == ["Example.run"], "File function metadata mismatch")
+    _expect(method_node.functions == ["Example.run"], "Symbol function metadata mismatch")
+    _expect(
+        file_node.code_hash == sha256(source.encode()).hexdigest(),
+        "File code hash mismatch",
+    )
+    _expect(
+        file_node.previous_reference == "previous-sha"
+        and method_node.previous_reference == "previous-sha",
+        "Previous reference mismatch",
+    )

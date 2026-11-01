@@ -4,7 +4,7 @@
  * Produces real communities (not individual symbols) for the sidebar.
  */
 
-import type { GraphNode, GraphEdge } from "@/lib/api";
+import type { GraphNode } from "@/lib/api";
 import { CLUSTER_PALETTE } from "./theme";
 
 export interface Community {
@@ -32,7 +32,6 @@ function clusterKeyFromPath(path: string): string {
  */
 export function computeCommunities(
   nodes: GraphNode[],
-  _edges: GraphEdge[],
 ): Community[] {
   const groups = new Map<string, Set<string>>();
 

@@ -18,7 +18,6 @@ import {
   computeDegrees,
   topDegreeNodeIds,
   buildNeighborSet,
-  type LayoutNode,
   type SimulationResult,
 } from "@/lib/graph/layout";
 import {
@@ -82,7 +81,6 @@ function ForceGraph({ graph }: GraphCanvasProps) {
   const savedPositionsRef = useRef(new Map<string, { x: number; y: number }>());
   const dirtyRef = useRef(true);
   const lastFrameRef = useRef(performance.now());
-  const prevLabelsRef = useRef(new Set<string>());
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0, camX: 0, camY: 0 });
   const reducedMotionRef = useRef(false);
@@ -109,8 +107,8 @@ function ForceGraph({ graph }: GraphCanvasProps) {
   const topDegreeIds = useMemo(() => topDegreeNodeIds(degrees, 15), [degrees]);
 
   const communities = useMemo(
-    () => computeCommunities(allNodes, allEdges),
-    [allNodes, allEdges],
+    () => computeCommunities(allNodes),
+    [allNodes],
   );
   const nodeCommunityMap = useMemo(
     () => buildNodeCommunityMap(communities),
@@ -247,6 +245,7 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     simRef.current = result;
     setSettled(false);
     dirtyRef.current = true;
+    const savedPositions = savedPositionsRef.current;
 
     // Fit camera after initial settle
     if (!reducedMotionRef.current) {
@@ -259,7 +258,7 @@ function ForceGraph({ graph }: GraphCanvasProps) {
 
     return () => {
       for (const node of result.layoutNodes) {
-        savedPositionsRef.current.set(node.id, { x: node.x, y: node.y });
+        savedPositions.set(node.id, { x: node.x, y: node.y });
       }
       result.simulation.stop();
     };
@@ -422,8 +421,7 @@ function ForceGraph({ graph }: GraphCanvasProps) {
         interaction.neighborIds,
         degrees,
       );
-      const labels = placeLabels(candidates, cameraRef.current.zoom, prevLabelsRef.current);
-      prevLabelsRef.current = new Set(labels.map((l) => l.id));
+      const labels = placeLabels(candidates, cameraRef.current.zoom);
 
       // Build render state
       const state: RenderState = {
@@ -521,7 +519,6 @@ function ForceGraph({ graph }: GraphCanvasProps) {
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
       const world = screenToWorld(sx, sy, cameraRef.current, rect.width, rect.height);
-
       const interaction = interactionRef.current;
 
       // Check if clicking a node
@@ -564,10 +561,6 @@ function ForceGraph({ graph }: GraphCanvasProps) {
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const sx = e.clientX - rect.left;
-      const sy = e.clientY - rect.top;
-      const world = screenToWorld(sx, sy, cameraRef.current, rect.width, rect.height);
 
       const interaction = interactionRef.current;
 
@@ -969,7 +962,7 @@ function ForceGraph({ graph }: GraphCanvasProps) {
   // ── Selected node info panel ─────────────────────────────────────
   const infoPanel = selectedNode && (
     <aside
-      className="graph-info-panel absolute right-4 top-4 z-10 w-64 rounded-xl p-4 shadow-2xl"
+      className="graph-info-panel absolute right-4 top-4 z-10 max-h-[calc(100%-2rem)] w-80 overflow-y-auto rounded-xl p-4 shadow-2xl"
       style={{
         background: "var(--graph-sidebar-bg)",
         border: "1px solid var(--graph-sidebar-border)",
@@ -995,6 +988,18 @@ function ForceGraph({ graph }: GraphCanvasProps) {
           <dt style={{ color: "rgba(160,170,200,0.5)" }}>Type</dt>
           <dd style={{ color: "rgba(200,210,230,0.85)" }}>
             {selectedNode.kind ?? selectedNode.type}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt style={{ color: "rgba(160,170,200,0.5)" }}>Start line</dt>
+          <dd style={{ color: "rgba(200,210,230,0.85)" }}>
+            {selectedNode.start_line ?? selectedNode.line ?? "—"}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt style={{ color: "rgba(160,170,200,0.5)" }}>End line</dt>
+          <dd style={{ color: "rgba(200,210,230,0.85)" }}>
+            {selectedNode.end_line ?? "—"}
           </dd>
         </div>
         <div className="flex justify-between gap-3">
@@ -1031,6 +1036,46 @@ function ForceGraph({ graph }: GraphCanvasProps) {
           </dd>
         </div>
       </dl>
+      <div className="mt-4 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+        <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: "rgba(160,170,200,0.5)" }}>
+          Functions & classes
+        </p>
+        <p className="mt-2 break-words text-xs" style={{ color: "rgba(200,210,230,0.8)" }}>
+          {(selectedNode.functions ?? []).length > 0
+            ? `Functions: ${(selectedNode.functions ?? []).join(", ")}`
+            : "Functions: —"}
+        </p>
+        <p className="mt-1 break-words text-xs" style={{ color: "rgba(200,210,230,0.8)" }}>
+          {(selectedNode.classes ?? []).length > 0
+            ? `Classes: ${(selectedNode.classes ?? []).join(", ")}`
+            : "Classes: —"}
+        </p>
+      </div>
+      <div className="mt-4 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+        <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: "rgba(160,170,200,0.5)" }}>
+          Code hash
+        </p>
+        <p className="mt-2 break-all font-mono text-[10px]" style={{ color: "rgba(200,210,230,0.75)" }}>
+          {selectedNode.code_hash || "—"}
+        </p>
+        <p className="mt-3 text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: "rgba(160,170,200,0.5)" }}>
+          Previous reference
+        </p>
+        <p className="mt-2 break-all font-mono text-[10px]" style={{ color: "rgba(200,210,230,0.75)" }}>
+          {selectedNode.previous_reference ?? "None"}
+        </p>
+      </div>
+      <div className="mt-4 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+        <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: "rgba(160,170,200,0.5)" }}>
+          Source snapshot
+        </p>
+        <pre
+          className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg p-3 font-mono text-[10px] leading-5"
+          style={{ background: "rgba(0,0,0,0.28)", color: "rgba(220,225,240,0.85)" }}
+        >
+          {selectedNode.source_code || "No source snapshot available."}
+        </pre>
+      </div>
     </aside>
   );
 

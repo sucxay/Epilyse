@@ -25,6 +25,7 @@ class ParsedFile:
     path :str 
     language:str
     has_errors: bool 
+    source_code: str = ""
     imports :list[ImportInfo] = field(default_factory=list)
     definitions: list[DefinitionInfo] = field(default_factory=list)
     calls: list[CallInfo] = field(default_factory=list)

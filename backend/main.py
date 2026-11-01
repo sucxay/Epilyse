@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.repositories import router as repositories_router 
 from backend.app.api import cloning
 from backend.app.api import graph
+from backend.app.api import webhook
 from backend.app.db.init_db import initialize_database
 
 app = FastAPI(title = "Epilyse",version = "0.0.1")
@@ -30,6 +31,7 @@ def on_startup():
 app.include_router(repositories_router)
 app.include_router(cloning.router)
 app.include_router(graph.router)
+app.include_router(webhook.router)
 @app.get("/health")
 def health():
     return {"status":"ok"}

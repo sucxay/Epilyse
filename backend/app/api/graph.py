@@ -42,6 +42,7 @@ def build_repository_graph(repository_id: str, request: GraphRequest):
         repo = connection.execute(
             """
             SELECT id, url, selected_branch
+                   , latest_commit_sha
             FROM repositories
             WHERE id = ?
             """,
@@ -59,6 +60,9 @@ def build_repository_graph(repository_id: str, request: GraphRequest):
     # 2. Resolve commit SHA.
     commit_sha = request.commit_sha
     if not commit_sha:
+        commit_sha = repo["latest_commit_sha"]
+
+    if not commit_sha:
         try:
             owner, name = parse_github_url(repository_url)
             github_repo = get_github_client().get_repo(f"{owner}/{name}")
@@ -68,6 +72,26 @@ def build_repository_graph(repository_id: str, request: GraphRequest):
                 status_code=502,
                 detail="Could not resolve the target GitHub commit.",
             ) from exc
+
+    with get_connection() as connection:
+        previous_revision = connection.execute(
+            """
+            SELECT commit_sha
+            FROM revisions
+            WHERE repository_id = ? AND commit_sha != ?
+            ORDER BY ingested_at DESC
+            LIMIT 1
+            """,
+            (repository_id, commit_sha),
+        ).fetchone()
+
+    previous_reference = (
+        previous_revision["commit_sha"]
+        if previous_revision is not None
+        else repo["latest_commit_sha"]
+        if repo["latest_commit_sha"] != commit_sha
+        else None
+    )
 
     # 3. Shallow‑checkout.
     try:
@@ -82,7 +106,10 @@ def build_repository_graph(repository_id: str, request: GraphRequest):
                 parsed_files.append(parse_files(path, repo_path))
 
             # 5. Build graph.
-            nodes, edges = build_graph(parsed_files)
+            nodes, edges = build_graph(
+                parsed_files,
+                previous_reference=previous_reference,
+            )
 
             # Convert dataclasses to plain dicts for JSON serialisation.
             node_dicts = [node.__dict__ for node in nodes]

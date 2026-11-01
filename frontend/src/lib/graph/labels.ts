@@ -62,7 +62,6 @@ function estimateWidth(text: string, fontSize: number): number {
 export function placeLabels(
   candidates: LabelCandidate[],
   zoom: number,
-  _prevLabels: Set<string>,
 ): PlacedLabel[] {
   if (zoom < LABEL.zoomThresholdHide) return [];
 

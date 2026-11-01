@@ -196,7 +196,7 @@ function drawEdges(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const { edges, nodes, camera, neighborIds, hoveredId, selectedId, highlightedEdgeIndices, nodeCommunityMap } = state;
+  const { edges, nodes, camera, hoveredId, selectedId, highlightedEdgeIndices } = state;
   const nodeMap = new Map<string, LayoutNode>();
   for (const node of nodes) nodeMap.set(node.id, node);
   const focusId = hoveredId ?? selectedId;
@@ -415,8 +415,6 @@ function drawLabels(
   canvasHeight: number,
 ): void {
   const { labels, camera } = state;
-  const fontSize = camera.zoom >= 0.8 ? 11 : 9;
-
   ctx.font = camera.zoom >= 0.8 ? LABEL.font : LABEL.smallFont;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";

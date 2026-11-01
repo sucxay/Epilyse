@@ -107,6 +107,11 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_runs_repository
                 ON ingestion_runs(repository_id);
+
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL
+            );
             """
         )
 

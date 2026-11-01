@@ -1,20 +1,19 @@
-from pathlib import Path 
-from backend.app.services.source_analyzer import analyze_repository
-from backend.app.parser.tree_sitter_parser import parse_files
+from pathlib import Path
+
 from backend.app.parser.models import ParsedFile
+from backend.app.parser.tree_sitter_parser import parse_files
+from backend.app.services.source_analyzer import analyze_repository
 
 
-REPO_ROOT = Path("/Users/suchayjoshi/Desktop/voice_assistant")
-
-
-def test_pipeline():
-    if not REPO_ROOT.is_dir():
-        raise FileNotFoundError(
-            f"Repository directory does not exist: {REPO_ROOT}"
-        )
+def test_pipeline(tmp_path: Path):
+    source_path = tmp_path / "main.py"
+    source_path.write_text(
+        "import os\n\nclass Service:\n    def run(self):\n        return os.getcwd()\n",
+        encoding="utf-8",
+    )
 
     # Stage 1: Discover and filter source files.
-    source_files = analyze_repository(REPO_ROOT)
+    source_files = analyze_repository(tmp_path)
 
     if not source_files:
         raise RuntimeError("Source analyzer found no supported files.")
@@ -26,16 +25,13 @@ def test_pipeline():
 
     # Stage 2: Parse supported Python files.
     for file_info in source_files:
-        path = Path(file_info.path)
-
-        if not path.is_absolute():
-            path = REPO_ROOT / path
+        path = tmp_path / file_info.path
 
         if file_info.language.lower() != "python":
             skipped_count += 1
             continue
 
-        parsed = parse_files(path, REPO_ROOT)
+        parsed = parse_files(path, tmp_path)
 
         # Stage 3: Validate the parsed model.
         if not isinstance(parsed, ParsedFile):
@@ -75,7 +71,3 @@ def test_pipeline():
     print("\nPipeline test passed.")
     print(f"Parsed Python files: {parsed_count}")
     print(f"Skipped non-Python files: {skipped_count}")
-
-
-if __name__ == "__main__":
-    test_pipeline()

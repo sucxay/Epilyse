@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -15,6 +15,12 @@ class Node:
     kind: Literal["file", "class", "function", "method"] | None
     line: int | None = None
     end_line: int | None = None
+    source_code: str = ""
+    start_line: int | None = None
+    functions: list[str] = field(default_factory=list)
+    classes: list[str] = field(default_factory=list)
+    code_hash: str = ""
+    previous_reference: str | None = None
 
 
 @dataclass(frozen=True)

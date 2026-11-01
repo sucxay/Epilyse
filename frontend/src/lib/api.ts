@@ -30,6 +30,12 @@ export interface GraphNode {
   kind: "file" | "class" | "function" | "method" | null;
   line: number | null;
   end_line: number | null;
+  source_code: string;
+  start_line: number | null;
+  functions: string[];
+  classes: string[];
+  code_hash: string;
+  previous_reference: string | null;
 }
 
 export interface GraphEdge {
