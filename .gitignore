@@ -5,9 +5,9 @@ __pycache__/
 .DS_Store
 
 data/epilyse.db
-data/repositories/
-data/graphs/
+data/repositories/ -xs
+tests/
 
+node_modules/
 frontend/node_modules/
-frontend/.next/
-frontend/tsconfig.tsbuildinfo
+backend/node_modules/

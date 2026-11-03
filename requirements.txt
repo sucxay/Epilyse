@@ -2,3 +2,4 @@ PyGithub
 FastAPI 
 Pydantic 
 pytest
+uvicorn[standard]
