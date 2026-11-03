@@ -47,6 +47,25 @@ export interface GraphEdge {
 export interface RepositoryGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  repository_url?: string;
+  branch?: string;
+  commit_sha?: string | null;
+  status?: IngestionStatus;
+  updated_at?: string;
+  error?: string | null;
+}
+
+export interface RepositoryStatus {
+  id: string;
+  owner: string;
+  name: string;
+  url: string;
+  default_branch: string;
+  selected_branch: string;
+  latest_commit_sha: string | null;
+  ingestion_status: IngestionStatus;
+  updated_at: string;
+  last_error: string | null;
 }
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -54,6 +73,7 @@ const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:800
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
+    cache: "no-store",
     headers: { "Content-Type": "application/json", ...init.headers },
   });
   const body: unknown = await response.json().catch(() => null);
@@ -102,5 +122,17 @@ export function buildRepositoryGraph(
   return request<RepositoryGraph>(`/repositories/${repositoryId}/graph`, {
     method: "POST",
     body: JSON.stringify({ commit_sha: normalizedCommitSha }),
+  });
+}
+
+export function getRepositoryStatus(repositoryId: string): Promise<RepositoryStatus> {
+  return request<RepositoryStatus>(`/repositories/${repositoryId}`, {
+    method: "GET",
+  });
+}
+
+export function getLatestRepositoryGraph(repositoryId: string): Promise<RepositoryGraph> {
+  return request<RepositoryGraph>(`/repositories/${repositoryId}/graph/latest`, {
+    method: "GET",
   });
 }

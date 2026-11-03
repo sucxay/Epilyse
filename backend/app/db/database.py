@@ -1,7 +1,8 @@
-import sqlite3 
+import os
+import sqlite3
 from pathlib import Path 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DB_PATH = PROJECT_ROOT / "data" / "epilyse.db"
+DB_PATH = Path(os.getenv("EPILYSE_DB_PATH", PROJECT_ROOT / "data" / "epilyse.db"))
 
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -12,6 +13,5 @@ def get_connection() -> sqlite3.Connection:
 
 
     
-
 
 

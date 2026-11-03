@@ -5,6 +5,9 @@ and optional commit SHA. The endpoint reuses existing services for cloning,
 source analysis, parsing and graph building.
 """
 
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -14,8 +17,10 @@ from backend.app.services.repo_cloner import shallow_checkout
 from backend.app.services.source_analyzer import discover_files
 from backend.app.parser.tree_sitter_parser import parse_files
 from backend.app.graph.builder import build_graph
+from backend.app.api.webhook import _save_graph
 
 router = APIRouter(prefix="/repositories", tags=["Graph Builder"])
+
 
 
 class GraphRequest(BaseModel):
@@ -23,6 +28,70 @@ class GraphRequest(BaseModel):
         default=None,
         description="Exact commit to analyse. If omitted the branch's current commit is used.",
     )
+
+
+def _read_snapshot(repository_id: str) -> dict:
+    with get_connection() as connection:
+        repository = connection.execute(
+            """
+            SELECT id, selected_branch, latest_commit_sha, ingestion_status,
+                   updated_at, last_error
+            FROM repositories
+            WHERE id = ?
+            """,
+            (repository_id,),
+        ).fetchone()
+        if repository is None:
+            raise HTTPException(status_code=404, detail="Repository not found.")
+
+        revision = connection.execute(
+            """
+            SELECT commit_sha, branch, snapshot_path, snapshot_status, ingested_at
+            FROM revisions
+            WHERE repository_id = ? AND commit_sha = ?
+              AND snapshot_status = 'completed'
+            """,
+            (repository_id, repository["latest_commit_sha"]),
+        ).fetchone()
+
+    if revision is None or not revision["snapshot_path"]:
+        return {
+            "status": repository["ingestion_status"],
+            "commit_sha": repository["latest_commit_sha"],
+            "branch": repository["selected_branch"],
+            "updated_at": repository["updated_at"],
+            "error": repository["last_error"],
+            "nodes": [],
+            "edges": [],
+        }
+
+    snapshot_path = Path(revision["snapshot_path"])
+    if not snapshot_path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="The latest graph snapshot is unavailable.",
+        )
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The latest graph snapshot could not be read.",
+        ) from exc
+
+    return {
+        **snapshot,
+        "status": repository["ingestion_status"],
+        "commit_sha": revision["commit_sha"],
+        "branch": revision["branch"],
+        "updated_at": revision["ingested_at"],
+        "error": repository["last_error"],
+    }
+
+
+@router.get("/{repository_id}/graph/latest")
+def latest_repository_graph(repository_id: str):
+    return _read_snapshot(repository_id)
 
 
 @router.post("/{repository_id}/graph")
@@ -109,6 +178,14 @@ def build_repository_graph(repository_id: str, request: GraphRequest):
             nodes, edges = build_graph(
                 parsed_files,
                 previous_reference=previous_reference,
+            )
+            _save_graph(
+                repository_id,
+                repository_url,
+                branch_name,
+                commit_sha,
+                nodes,
+                edges,
             )
 
             # Convert dataclasses to plain dicts for JSON serialisation.

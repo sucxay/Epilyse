@@ -12,6 +12,7 @@ export default function DashboardPage() {
     const nextResult = { registration, clone, graph };
     setResult(nextResult);
     window.localStorage.setItem("coderag-latest-graph", JSON.stringify(nextResult));
+    window.localStorage.setItem("epilyse-repository-id", registration.repository_id);
   }
   return (
     <div className="flex min-h-screen">

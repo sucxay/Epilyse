@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.db.database import get_connection
 from backend.app.api.webhook import process_push
+from backend.app.services.github_ingestion import canonical_github_url
 from backend.main import app
 
 
@@ -100,6 +101,69 @@ def test_push_rejects_invalid_signature(monkeypatch):
         raise AssertionError(f"Expected 401, got {response.status_code}: {response.text}")
 
 
+def test_ping_event_is_ignored(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    payload = b"{}"
+    response = client.post(
+        "/webhooks/github",
+        content=payload,
+        headers={
+            "X-GitHub-Event": "ping",
+            "X-GitHub-Delivery": f"ping-{uuid.uuid4()}",
+            "X-Hub-Signature-256": _signature(payload),
+        },
+    )
+    if response.status_code != 200 or response.json() != {"status": "ignored"}:
+        raise AssertionError(f"Expected ignored ping, got {response.status_code}: {response.text}")
+
+
+def test_unregistered_repository_and_branch_are_ignored(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    payload_data = _payload()
+    payload_data["repository"]["html_url"] = f"{REPOSITORY_URL}.git"
+    payload_data["ref"] = "refs/heads/release"
+    payload = json.dumps(payload_data).encode()
+    response = client.post(
+        "/webhooks/github",
+        content=payload,
+        headers={
+            "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": f"unmatched-{uuid.uuid4()}",
+            "X-Hub-Signature-256": _signature(payload),
+        },
+    )
+    if response.json() != {"status": "ignored"}:
+        raise AssertionError(f"Expected ignored unmatched push, got {response.text}")
+
+
+def test_registered_branch_mismatch_is_ignored(monkeypatch):
+    repository_id = _register_repository()
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    payload_data = _payload()
+    payload_data["ref"] = "refs/heads/release"
+    payload = json.dumps(payload_data).encode()
+    try:
+        response = client.post(
+            "/webhooks/github",
+            content=payload,
+            headers={
+                "X-GitHub-Event": "push",
+                "X-GitHub-Delivery": f"branch-{uuid.uuid4()}",
+                "X-Hub-Signature-256": _signature(payload),
+            },
+        )
+        if response.json() != {"status": "ignored"}:
+            raise AssertionError(f"Expected ignored branch mismatch, got {response.text}")
+    finally:
+        with get_connection() as connection:
+            connection.execute("DELETE FROM repositories WHERE id = ?", (repository_id,))
+
+
+def test_repository_url_normalization():
+    if canonical_github_url("https://github.com/example/project.git") != REPOSITORY_URL:
+        raise AssertionError("The .git repository URL was not canonicalized.")
+
+
 def test_deleted_branch_is_ignored(monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     payload_data = _payload()
@@ -139,6 +203,8 @@ def test_process_push_persists_exact_revision_and_graph(tmp_path):
             patch("backend.app.api.webhook.discover_files", return_value=[source_path]),
             patch("backend.app.api.webhook.parse_files", return_value=object()),
             patch("backend.app.api.webhook.build_graph", return_value=([node], [edge])),
+            patch("backend.app.api.webhook._GRAPH_ROOT", tmp_path / "graphs"),
+            patch("backend.app.api.webhook._is_current_branch_head", return_value=True),
         ):
             process_push(repository_id, REPOSITORY_URL, "main", COMMIT_SHA)
 
@@ -158,6 +224,77 @@ def test_process_push_persists_exact_revision_and_graph(tmp_path):
             raise AssertionError(f"Unexpected revision SHA: {revision['commit_sha']}")
         if not Path(revision["snapshot_path"]).exists():
             raise AssertionError(f"Graph snapshot was not written: {revision['snapshot_path']}")
+    finally:
+        with get_connection() as connection:
+            connection.execute("DELETE FROM repositories WHERE id = ?", (repository_id,))
+
+
+def test_latest_graph_endpoint_reads_completed_snapshot(tmp_path):
+    repository_id = _register_repository()
+    node = SimpleNamespace(id="file:main.py", type="file")
+    edge = SimpleNamespace(source="file:main.py", target="file:main.py", type="contains")
+    try:
+        with (
+            patch("backend.app.api.webhook._GRAPH_ROOT", tmp_path / "graphs"),
+            patch("backend.app.api.webhook._is_current_branch_head", return_value=True),
+        ):
+            with get_connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE repositories
+                    SET latest_commit_sha = ?, ingestion_status = 'completed'
+                    WHERE id = ?
+                    """,
+                    (COMMIT_SHA, repository_id),
+                )
+            from backend.app.api.webhook import _save_graph
+
+            _save_graph(
+                repository_id,
+                REPOSITORY_URL,
+                "main",
+                COMMIT_SHA,
+                [node],
+                [edge],
+            )
+            response = client.get(f"/repositories/{repository_id}/graph/latest")
+
+        if response.status_code != 200:
+            raise AssertionError(f"Expected latest graph, got {response.status_code}: {response.text}")
+        if response.json()["commit_sha"] != COMMIT_SHA:
+            raise AssertionError("Latest graph returned the wrong commit.")
+        if len(response.json()["nodes"]) != 1:
+            raise AssertionError("Latest graph returned the wrong node count.")
+    finally:
+        with get_connection() as connection:
+            connection.execute("DELETE FROM repositories WHERE id = ?", (repository_id,))
+
+
+def test_process_push_records_checkout_failure():
+    repository_id = _register_repository()
+    try:
+        with patch(
+            "backend.app.api.webhook.shallow_checkout",
+            side_effect=RuntimeError("checkout failed"),
+        ):
+            process_push(repository_id, REPOSITORY_URL, "main", COMMIT_SHA)
+
+        with get_connection() as connection:
+            repository = connection.execute(
+                "SELECT ingestion_status, last_error FROM repositories WHERE id = ?",
+                (repository_id,),
+            ).fetchone()
+            revision = connection.execute(
+                """
+                SELECT snapshot_status FROM revisions
+                WHERE repository_id = ? AND commit_sha = ?
+                """,
+                (repository_id, COMMIT_SHA),
+            ).fetchone()
+        if tuple(repository) != ("failed", "checkout failed"):
+            raise AssertionError(f"Checkout failure was not persisted: {repository}")
+        if revision["snapshot_status"] != "failed":
+            raise AssertionError("Failed checkout did not mark the revision failed.")
     finally:
         with get_connection() as connection:
             connection.execute("DELETE FROM repositories WHERE id = ?", (repository_id,))

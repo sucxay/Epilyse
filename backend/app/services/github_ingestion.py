@@ -55,6 +55,11 @@ def parse_github_url(url: str) -> tuple[str, str]:
     return owner, name
 
 
+def canonical_github_url(url: str) -> str:
+    owner, name = parse_github_url(url)
+    return f"https://github.com/{owner}/{name}"
+
+
 def get_github_client() -> Github:
     token = os.getenv("GITHUB_TOKEN")
 
@@ -73,7 +78,9 @@ def register_repository(url: str, branch: str | None = None ,sha : str|None = No
     try:
         gh_repo = client.get_repo(f"{owner}/{name}")
 
-        selected_branch = branch or gh_repo.default_branch
+        selected_branch = (branch or gh_repo.default_branch).strip()
+        if not selected_branch:
+            raise ValueError("Branch name cannot be empty.")
 
         if sha:
             if not re.fullmatch(r"[a-fA-F0-9]{32,64}", sha):
@@ -84,7 +91,7 @@ def register_repository(url: str, branch: str | None = None ,sha : str|None = No
             branch_info = gh_repo.get_branch(selected_branch)
             commit_sha = branch_info.commit.sha
 
-        canonical_url = f"https://github.com/{gh_repo.full_name}"
+        canonical_url = canonical_github_url(f"https://github.com/{gh_repo.full_name}")
         timestamp = utc_now()
 
         with get_connection() as connection:
