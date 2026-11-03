@@ -68,23 +68,50 @@ export interface RepositoryStatus {
   last_error: string | null;
 }
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+const apiBaseUrl =
+  configuredApiBaseUrl ||
+  (process.env.NODE_ENV === "development" ? "http://localhost:8000" : null);
+const REQUEST_TIMEOUT_MS = 20_000;
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...init,
-    cache: "no-store",
-    headers: { "Content-Type": "application/json", ...init.headers },
-  });
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const detail =
-      typeof body === "object" && body !== null && "detail" in body
-        ? String(body.detail)
-        : `Request failed with status ${response.status}.`;
-    throw new Error(detail);
+  if (!apiBaseUrl) {
+    throw new Error(
+      "The frontend API URL is not configured. Set NEXT_PUBLIC_API_BASE_URL and redeploy the frontend.",
+    );
   }
-  return body as T;
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${apiBaseUrl}${path}`, {
+      ...init,
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...init.headers },
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail =
+        typeof body === "object" && body !== null && "detail" in body
+          ? String(body.detail)
+          : `Request failed with status ${response.status}.`;
+      throw new Error(detail);
+    }
+    return body as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The backend request timed out. Check the API URL and backend logs.");
+    }
+    if (error instanceof TypeError) {
+      throw new Error(
+        "The backend could not be reached. Check NEXT_PUBLIC_API_BASE_URL and CORS configuration.",
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 export function registerRepository(url: string, revision: string): Promise<RegisterResponse> {

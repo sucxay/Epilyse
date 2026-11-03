@@ -33,6 +33,17 @@ Set the frontend environment variable to the deployed backend:
 NEXT_PUBLIC_API_BASE_URL=https://your-backend.example.com
 ```
 
+Set the backend CORS allowlist to the deployed frontend origin(s), separated
+by commas:
+
+```text
+CORS_ORIGINS=https://your-frontend.example.com
+```
+
+The frontend uses `http://localhost:8000` only in development. A production
+build fails clearly if `NEXT_PUBLIC_API_BASE_URL` is missing instead of
+silently sending requests to the browser's localhost.
+
 ## End-to-end verification
 
 1. Deploy the backend and confirm `GET /health` returns `{"status":"ok"}`.

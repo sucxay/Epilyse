@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 # Add project root to sys.path so 'backend' package imports resolve regardless of cwd
@@ -16,9 +17,18 @@ from backend.app.db.init_db import initialize_database
 
 app = FastAPI(title = "Epilyse",version = "0.0.1")
 
+configured_origins = os.getenv("CORS_ORIGINS", "")
+cors_origins = [
+    origin.strip()
+    for origin in configured_origins.split(",")
+    if origin.strip()
+]
+if not cors_origins:
+    cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

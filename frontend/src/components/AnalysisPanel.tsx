@@ -30,10 +30,10 @@ export function AnalysisPanel({ onComplete }: AnalysisPanelProps) {
       setStep("graph");
       const graph = await buildRepositoryGraph(registration.repository_id, clone.commit_sha);
       onComplete(registration, clone, graph);
-      setStep("idle");
     } catch (requestError) {
-      setStep("idle");
       setError(requestError instanceof Error ? requestError.message : "The repository could not be analyzed.");
+    } finally {
+      setStep("idle");
     }
   }
 
