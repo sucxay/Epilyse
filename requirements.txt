@@ -1,5 +1,8 @@
-PyGithub 
-FastAPI 
-Pydantic 
+fastapi
+PyGithub
+Pydantic
 pytest
+python-dotenv
+tree-sitter
+tree-sitter-python
 uvicorn[standard]
