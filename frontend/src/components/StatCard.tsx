@@ -1,15 +1,25 @@
 interface StatCardProps {
   label: string;
-  value: number | null;
-  detail: string;
+  value: number | string | null;
+  detail?: string;
+  trend?: string;
 }
 
-export function StatCard({ label, value, detail }: StatCardProps) {
+export function StatCard({ label, value, detail, trend }: StatCardProps) {
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-panel">
-      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p>
-      <p className="mt-3 text-3xl font-bold tracking-tight text-ink">{value === null ? "—" : value.toLocaleString()}</p>
-      <p className="mt-1 text-xs text-slate-500">{detail}</p>
-    </article>
+    <div className="bg-surface border border-white/[0.08] p-3.5 rounded transition-colors hover:border-white/[0.14]">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{label}</p>
+        {trend && <span className="text-[10px] font-mono text-accent">{trend}</span>}
+      </div>
+      <p className="mt-2 text-2xl font-mono font-semibold tracking-tight text-ink">
+        {value === null || value === undefined
+          ? "—"
+          : typeof value === "number"
+          ? value.toLocaleString()
+          : value}
+      </p>
+      {detail && <p className="mt-1 text-[11px] text-muted truncate">{detail}</p>}
+    </div>
   );
 }

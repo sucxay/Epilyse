@@ -1,13 +1,25 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { buildRepositoryGraph, cloneRepository, registerRepository, type CloneResponse, type RegisterResponse, type RepositoryGraph } from "@/lib/api";
+import {
+  buildRepositoryGraph,
+  cloneRepository,
+  registerRepository,
+  type CloneResponse,
+  type RegisterResponse,
+  type RepositoryGraph,
+} from "@/lib/api";
 
 interface AnalysisPanelProps {
-  onComplete: (registration: RegisterResponse, clone: CloneResponse, graph: RepositoryGraph) => void;
+  onComplete: (
+    registration: RegisterResponse,
+    clone: CloneResponse,
+    graph: RepositoryGraph
+  ) => void;
+  className?: string;
 }
 
-export function AnalysisPanel({ onComplete }: AnalysisPanelProps) {
+export function AnalysisPanel({ onComplete, className = "" }: AnalysisPanelProps) {
   const [url, setUrl] = useState("");
   const [revision, setRevision] = useState("");
   const [step, setStep] = useState<"idle" | "registering" | "cloning" | "graph">("idle");
@@ -15,6 +27,8 @@ export function AnalysisPanel({ onComplete }: AnalysisPanelProps) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!url.trim()) return;
+
     setError(null);
     setStep("registering");
     try {
@@ -38,28 +52,73 @@ export function AnalysisPanel({ onComplete }: AnalysisPanelProps) {
   }
 
   const busy = step !== "idle";
+
   return (
-    <section className="rounded-2xl bg-ink p-6 text-white shadow-panel sm:p-8">
-      <div className="max-w-2xl">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-300">New analysis</p>
-        <h1 className="mt-3 text-2xl font-bold tracking-tight sm:text-3xl">Understand any repository, faster.</h1>
-        <p className="mt-3 text-sm leading-6 text-slate-300">Connect a public GitHub repository to inspect its source structure and prepare it for retrieval.</p>
+    <div className={`bg-surface border border-white/[0.08] rounded p-4 ${className}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+            Repository Analysis
+          </h2>
+        </div>
+        {busy && (
+          <span className="text-xs text-accent font-mono animate-pulse">
+            {step === "registering"
+              ? "Registering..."
+              : step === "cloning"
+              ? "Cloning repository..."
+              : "Building graph..."}
+          </span>
+        )}
       </div>
-      <form className="mt-8 grid gap-4 md:grid-cols-[1fr_0.7fr_auto] md:items-end" onSubmit={handleSubmit}>
-        <label className="block">
-          <span className="mb-2 block text-xs font-semibold text-slate-300">GitHub repository URL</span>
-          <input required type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository" className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3.5 py-3 text-sm text-white outline-none ring-orange-300 placeholder:text-slate-500 focus:ring-2" />
-        </label>
-        <label className="block">
-          <span className="mb-2 block text-xs font-semibold text-slate-300">Branch or commit <span className="font-normal text-slate-500">(optional)</span></span>
-          <input value={revision} onChange={(event) => setRevision(event.target.value)} placeholder="main or SHA" className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3.5 py-3 text-sm text-white outline-none ring-orange-300 placeholder:text-slate-500 focus:ring-2" />
-        </label>
-        <button disabled={busy} className="rounded-lg bg-accent px-5 py-3 text-sm font-bold text-white transition hover:bg-orange-600 disabled:cursor-wait disabled:opacity-60">
-          {step === "registering" ? "Connecting…" : step === "cloning" ? "Preparing…" : step === "graph" ? "Building graph…" : "Analyze repository"}
+
+      <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-2.5 items-stretch md:items-center">
+        <div className="flex-1 relative">
+          <input
+            required
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://github.com/owner/repository"
+            disabled={busy}
+            className="w-full bg-bg border border-white/[0.08] rounded px-3 py-2 text-xs text-ink placeholder:text-muted-dark focus:outline-none focus:border-accent transition-colors disabled:opacity-50"
+          />
+        </div>
+
+        <div className="w-full md:w-56">
+          <input
+            type="text"
+            value={revision}
+            onChange={(e) => setRevision(e.target.value)}
+            placeholder="Branch or commit (optional)"
+            disabled={busy}
+            className="w-full bg-bg border border-white/[0.08] rounded px-3 py-2 text-xs text-ink placeholder:text-muted-dark focus:outline-none focus:border-accent transition-colors disabled:opacity-50"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={busy || !url.trim()}
+          className="shrink-0 bg-accent hover:bg-accent-hover text-white text-xs font-medium px-4 py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-1.5"
+        >
+          {busy ? (
+            <span>Analyzing…</span>
+          ) : (
+            <>
+              <span>Analyze</span>
+              <span className="text-[10px]">→</span>
+            </>
+          )}
         </button>
       </form>
-      {busy && <p className="mt-4 text-xs text-orange-200" role="status">{step === "registering" ? "Validating repository and branch with GitHub…" : step === "cloning" ? "Checking out the requested revision…" : "Parsing source files and resolving relationships…"}</p>}
-      {error && <p className="mt-4 rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200" role="alert">{error}</p>}
-    </section>
+
+      {error && (
+        <div className="mt-2.5 text-xs text-danger font-mono flex items-center gap-1.5">
+          <span>✕</span>
+          <span>{error}</span>
+        </div>
+      )}
+    </div>
   );
 }

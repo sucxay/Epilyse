@@ -5,12 +5,27 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#17212b",
-        mist: "#f5f7fa",
-        accent: "#e15c3b",
+        bg: "#111318",
+        surface: "#161b22",
+        "surface-raised": "#1c2128",
+        sidebar: "#0d1117",
+        accent: "#4f7cff",
+        "accent-hover": "#6690ff",
+        success: "#3fb950",
+        warning: "#d29922",
+        danger: "#f85149",
+        ink: "#e6edf3",
+        muted: "#7d8590",
+        "muted-dark": "#484f58",
       },
-      boxShadow: {
-        panel: "0 10px 35px rgba(25, 38, 51, 0.06)",
+      borderColor: {
+        DEFAULT: "rgba(255, 255, 255, 0.08)",
+        subtle: "rgba(255, 255, 255, 0.06)",
+        strong: "rgba(255, 255, 255, 0.14)",
+      },
+      fontFamily: {
+        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "monospace"],
       },
     },
   },
