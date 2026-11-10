@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import React from "react";
+import { endDemoSession, getDemoUser } from "@/lib/demo-auth";
 
 interface NavItem {
   name: string;
@@ -86,6 +87,21 @@ const navItems: NavItem[] = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [user, setUser] = React.useState<ReturnType<typeof getDemoUser>>(null);
+
+  React.useEffect(() => {
+    setUser(getDemoUser());
+  }, []);
+
+  if (pathname === "/login" || pathname === "/signup") {
+    return null;
+  }
+
+  function handleSignOut() {
+    endDemoSession();
+    router.replace("/login");
+  }
 
   return (
     <aside className="w-[220px] shrink-0 h-screen bg-sidebar border-r border-white/[0.08] flex flex-col justify-between select-none">
@@ -156,13 +172,19 @@ export function AppSidebar() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-medium text-ink truncate leading-tight">
-              Developer
+              {user?.fullName || "Developer"}
             </p>
             <p className="text-[10px] font-mono text-muted-dark truncate leading-tight">
-              github.com
+              {user?.email || "Local session"}
             </p>
           </div>
-          <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" title="API Connected" />
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="shrink-0 rounded px-1.5 py-1 text-[10px] text-muted transition-colors hover:bg-white/[0.06] hover:text-ink"
+          >
+            Sign out
+          </button>
         </div>
         <div className="mt-2 px-1 flex items-center justify-between text-[10px] font-mono text-muted-dark">
           <span>Epilyse Engine</span>

@@ -29,6 +29,8 @@
 - `frontend/src/app/quality/page.tsx`: Quality analysis page — stability index from code_hash/previous_reference fields, entity breakdown by kind, complexity registry.
 - `frontend/src/app/repositories/page.tsx`: Repositories page — connected repository overview with direct navigation shortcuts.
 - `frontend/src/app/settings/page.tsx`: Settings page — backend connection inspector, localStorage cache manager, engine capabilities roadmap.
+- `frontend/src/app/login/page.tsx`: Login page — local demo email/password and GitHub sign-in entry point.
+- `frontend/src/app/signup/page.tsx`: Signup page — local demo account creation form with password confirmation.
 
 ### Components
 - `frontend/src/components/AnalysisPanel.tsx`: Compact inline repository registration form; drives register → clone → graph API sequence; exposes step-aware loading and error states.
@@ -38,8 +40,11 @@
 - `frontend/src/components/StatRow.tsx`: Compact label-left / value-right information row for dense data panels.
 - `frontend/src/components/CustomCursor.tsx`: Optional pointer-fine cursor follower with lerp smoothing.
 - `frontend/src/components/Sidebar.tsx`: Re-exports `AppSidebar` for backward compatibility.
+- `frontend/src/components/AuthForm.tsx`: Shared responsive login and signup form with local demo session creation and password visibility state.
+- `frontend/src/components/AuthGate.tsx`: Client-side demo session gate that protects dashboard routes and redirects auth routes.
 
 ### API & Graph Libraries
+- `frontend/src/lib/demo-auth.ts`: Browser-local demo account/session storage helpers used by the auth UI.
 - `frontend/src/lib/api.ts`: Defines all frontend API contracts (types + fetch functions) and the shared request helper with timeout and error handling.
 - `frontend/src/lib/graph/theme.ts`: Single source of truth for all graph visual constants — palette, edge colors, node kind styles, layout and interaction parameters.
 - `frontend/src/lib/graph/layout.ts`: d3-force simulation factory with cluster gravity, degree-based sizing, and saved position restoration.
