@@ -2,9 +2,9 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { hasDemoSession } from "@/lib/demo-auth";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
-const publicRoutes = new Set(["/login", "/signup"]);
+const publicRoutes = new Set(["/login", "/signup", "/auth/callback"]);
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -12,19 +12,30 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const authenticated = hasDemoSession();
+    let active = true;
+    const supabase = getSupabaseBrowserClient();
+    const applyRoute = (authenticated: boolean) => {
+      if (!active) return;
+      if (!publicRoutes.has(pathname) && !authenticated) {
+        router.replace("/login");
+        return;
+      }
+      if (publicRoutes.has(pathname) && authenticated && pathname !== "/auth/callback") {
+        router.replace("/");
+        return;
+      }
+      setIsReady(true);
+    };
 
-    if (!publicRoutes.has(pathname) && !authenticated) {
-      router.replace("/login");
-      return;
-    }
+    void supabase.auth.getSession().then(({ data }) => applyRoute(Boolean(data.session)));
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      applyRoute(Boolean(session));
+    });
 
-    if (publicRoutes.has(pathname) && authenticated) {
-      router.replace("/");
-      return;
-    }
-
-    setIsReady(true);
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
   }, [pathname, router]);
 
   if (!isReady) {

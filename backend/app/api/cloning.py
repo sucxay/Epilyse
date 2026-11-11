@@ -1,7 +1,7 @@
 
 from subprocess import TimeoutExpired
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.db.database import get_connection
@@ -10,11 +10,13 @@ from backend.app.services.github_ingestion import (
     parse_github_url,
 )
 from backend.app.services.repo_cloner import shallow_checkout, run_git
+from backend.app.auth import require_supabase_user
 
 
 router = APIRouter(
     prefix="/repositories",
     tags=["Repository Cloning"],
+    dependencies=[Depends(require_supabase_user)],
 )
 
 

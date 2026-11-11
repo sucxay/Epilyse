@@ -6,3 +6,4 @@ python-dotenv
 tree-sitter
 tree-sitter-python
 uvicorn[standard]
+PyJWT[crypto]

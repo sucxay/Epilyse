@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import React from "react";
-import { endDemoSession, getDemoUser } from "@/lib/demo-auth";
+import type { User } from "@supabase/supabase-js";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 interface NavItem {
   name: string;
@@ -88,18 +89,23 @@ const navItems: NavItem[] = [
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = React.useState<ReturnType<typeof getDemoUser>>(null);
+  const [user, setUser] = React.useState<User | null>(null);
 
   React.useEffect(() => {
-    setUser(getDemoUser());
+    const supabase = getSupabaseBrowserClient();
+    void supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => data.subscription.unsubscribe();
   }, []);
 
   if (pathname === "/login" || pathname === "/signup") {
     return null;
   }
 
-  function handleSignOut() {
-    endDemoSession();
+  async function handleSignOut() {
+    await getSupabaseBrowserClient().auth.signOut();
     router.replace("/login");
   }
 
@@ -172,10 +178,10 @@ export function AppSidebar() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-medium text-ink truncate leading-tight">
-              {user?.fullName || "Developer"}
+              {user?.user_metadata?.full_name || user?.email || "Developer"}
             </p>
             <p className="text-[10px] font-mono text-muted-dark truncate leading-tight">
-              {user?.email || "Local session"}
+              {user?.email || "No active session"}
             </p>
           </div>
           <button

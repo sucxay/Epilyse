@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { getDemoUser, saveDemoUser, startDemoSession } from "@/lib/demo-auth";
+import { describeAuthError, getAuthCallbackUrl, getSupabaseBrowserClient } from "@/lib/supabase";
 
 type AuthMode = "login" | "signup";
 
@@ -80,37 +80,59 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setMessage("");
+    setIsSubmitting(true);
 
-    const formData = new FormData(event.currentTarget);
-    const email = String(formData.get("email") ?? "").trim().toLowerCase();
-    const password = String(formData.get("password") ?? "");
+    try {
+      const formData = new FormData(event.currentTarget);
+      const email = String(formData.get("email") ?? "").trim().toLowerCase();
+      const password = String(formData.get("password") ?? "");
+      const supabase = getSupabaseBrowserClient();
 
-    if (isLogin) {
-      const user = getDemoUser();
-      if (!user || user.email !== email || user.password !== password) {
-        setError("Incorrect email or password. Create an account first if you are new to Epilyse.");
+      if (isLogin) {
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) throw signInError;
+        router.replace("/");
         return;
       }
 
-      startDemoSession();
-      router.push("/");
-      return;
+      const fullName = String(formData.get("full-name") ?? "").trim();
+      const confirmPassword = String(formData.get("confirm-password") ?? "");
+      if (password !== confirmPassword) {
+        setError("Passwords do not match.");
+        return;
+      }
+
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { full_name: fullName },
+          emailRedirectTo: getAuthCallbackUrl(),
+        },
+      });
+      if (signUpError) throw signUpError;
+      if (data.session) {
+        router.replace("/");
+      } else {
+        setMessage("Check your email to verify your account before signing in.");
+      }
+    } catch (authError) {
+      setError(
+        describeAuthError(
+          authError instanceof Error ? authError.message : "Authentication failed.",
+          mode,
+        ),
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const fullName = String(formData.get("full-name") ?? "").trim();
-    const confirmPassword = String(formData.get("confirm-password") ?? "");
-
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-
-    saveDemoUser({ fullName, email, password });
-    router.push("/");
   }
 
   return (
@@ -201,13 +223,19 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
 
             <button
               type="submit"
+              disabled={isSubmitting}
               className="h-11 w-full rounded-md bg-accent text-sm font-medium text-white transition-colors hover:bg-accent-hover focus:outline-none focus:ring-2 focus:ring-accent/40"
             >
-              {isLogin ? "Sign in" : "Create account"}
+              {isSubmitting ? "Please wait..." : isLogin ? "Sign in" : "Create account"}
             </button>
             {error && (
               <p role="alert" className="text-xs leading-5 text-danger">
                 {error}
+              </p>
+            )}
+            {message && (
+              <p role="status" className="text-xs leading-5 text-muted">
+                {message}
               </p>
             )}
           </form>
@@ -220,13 +248,26 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
 
           <button
             type="button"
-            onClick={() => {
-              saveDemoUser({
-                fullName: "GitHub Developer",
-                email: "github@example.com",
-                password: "github-demo",
-              });
-              router.push("/");
+            disabled={isSubmitting}
+            onClick={async () => {
+              setError("");
+              setMessage("");
+              setIsSubmitting(true);
+              try {
+                const { error: oauthError } = await getSupabaseBrowserClient().auth.signInWithOAuth({
+                  provider: "github",
+                  options: { redirectTo: getAuthCallbackUrl() },
+                });
+                if (oauthError) throw oauthError;
+              } catch (authError) {
+                setError(
+                  describeAuthError(
+                    authError instanceof Error ? authError.message : "Authentication failed.",
+                    mode,
+                  ),
+                );
+                setIsSubmitting(false);
+              }
             }}
             className="flex h-11 w-full items-center justify-center gap-2.5 rounded-md border border-white/[0.12] bg-white/[0.02] text-sm font-medium text-ink transition-colors hover:border-white/[0.2] hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-white/10"
           >
