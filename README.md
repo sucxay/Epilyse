@@ -33,6 +33,18 @@ Set the frontend environment variable to the deployed backend:
 NEXT_PUBLIC_API_BASE_URL=https://your-backend.example.com
 ```
 
+Configure the frontend Supabase public settings (the anon key is safe to expose in
+browser code; never use a service-role key):
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<your public anon key>
+```
+
+In the Supabase dashboard, enable email/password auth, configure the GitHub OAuth
+provider, and add the frontend origin plus `/auth/callback` to the allowed redirect
+URLs.
+
 Set the backend CORS allowlist to the deployed frontend origin(s), separated
 by commas:
 

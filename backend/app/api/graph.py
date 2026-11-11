@@ -8,7 +8,7 @@ source analysis, parsing and graph building.
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.db.database import get_connection
@@ -18,8 +18,13 @@ from backend.app.services.source_analyzer import discover_files
 from backend.app.parser.tree_sitter_parser import parse_files
 from backend.app.graph.builder import build_graph
 from backend.app.api.webhook import _save_graph
+from backend.app.auth import require_supabase_user
 
-router = APIRouter(prefix="/repositories", tags=["Graph Builder"])
+router = APIRouter(
+    prefix="/repositories",
+    tags=["Graph Builder"],
+    dependencies=[Depends(require_supabase_user)],
+)
 
 
 

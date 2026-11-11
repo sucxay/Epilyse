@@ -1,3 +1,5 @@
+import { getCurrentSession } from "@/lib/supabase";
+
 export type IngestionStatus = "pending" | "running" | "completed" | "failed";
 
 export interface RegisterResponse {
@@ -11,7 +13,6 @@ export interface RegisterResponse {
   latest_analyzed_sha: string | null;
   ingestion_status: IngestionStatus;
 }
-
 export interface CloneResponse {
   repository_id: string;
   repository_url: string;
@@ -84,11 +85,16 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
+    const session = await getCurrentSession();
     const response = await fetch(`${apiBaseUrl}${path}`, {
       ...init,
       cache: "no-store",
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...init.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        ...init.headers,
+      },
     });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) {

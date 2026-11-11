@@ -1,11 +1,16 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
+from backend.app.auth import require_supabase_user
 from ..db.database import get_connection
 from ..schemas.github_schemas import RepositoryRegisterRequest
 from ..services.github_ingestion import register_repository 
 from .webhook import process_push
 
-router = APIRouter(prefix ="/repositories",tags=['Repositories'])
+router = APIRouter(
+    prefix="/repositories",
+    tags=["Repositories"],
+    dependencies=[Depends(require_supabase_user)],
+)
 @router.post("/register",status_code=201)
 def register(request : RepositoryRegisterRequest):
     try:
