@@ -16,7 +16,11 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 def _supabase_url() -> str:
-    return os.getenv("SUPABASE_URL", "").rstrip("/")
+    return (
+        os.getenv("SUPABASE_URL")
+        or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+        or ""
+    ).rstrip("/")
 
 
 def _issuer() -> str:

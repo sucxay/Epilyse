@@ -1,4 +1,4 @@
-import { getCurrentSession } from "@/lib/supabase";
+import { getCurrentAccessToken } from "@/lib/supabase";
 
 export type IngestionStatus = "pending" | "running" | "completed" | "failed";
 
@@ -85,17 +85,22 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const session = await getCurrentSession();
-    const response = await fetch(`${apiBaseUrl}${path}`, {
-      ...init,
-      cache: "no-store",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        ...init.headers,
-      },
-    });
+    const fetchWithToken = (accessToken: string) => {
+      const headers = new Headers(init.headers);
+      headers.set("Content-Type", "application/json");
+      headers.set("Authorization", `Bearer ${accessToken}`);
+      return fetch(`${apiBaseUrl}${path}`, {
+        ...init,
+        cache: "no-store",
+        signal: controller.signal,
+        headers,
+      });
+    };
+
+    let response = await fetchWithToken(await getCurrentAccessToken());
+    if (response.status === 401) {
+      response = await fetchWithToken(await getCurrentAccessToken(true));
+    }
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       const detail =

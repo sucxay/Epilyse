@@ -46,6 +46,8 @@ function Field({
   placeholder,
   autoComplete,
   action,
+  value,
+  onChange,
 }: {
   id: string;
   label: string;
@@ -53,6 +55,8 @@ function Field({
   placeholder: string;
   autoComplete?: string;
   action?: React.ReactNode;
+  value?: string;
+  onChange?: React.ChangeEventHandler<HTMLInputElement>;
 }) {
   return (
     <div className="space-y-2">
@@ -68,6 +72,8 @@ function Field({
         type={type}
         placeholder={placeholder}
         autoComplete={autoComplete}
+        value={value}
+        onChange={onChange}
         required
         className="h-11 w-full rounded-md border border-white/[0.1] bg-[#0d1117] px-3.5 text-sm text-ink outline-none transition-colors placeholder:text-muted-dark hover:border-white/[0.16] focus:border-accent focus:ring-2 focus:ring-accent/15"
       />
@@ -78,6 +84,7 @@ function Field({
 export function AuthForm({ mode }: { mode: AuthMode }) {
   const isLogin = mode === "login";
   const router = useRouter();
+  const [email, setEmail] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -91,12 +98,15 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
 
     try {
       const formData = new FormData(event.currentTarget);
-      const email = String(formData.get("email") ?? "").trim().toLowerCase();
+      const normalizedEmail = email.trim().toLowerCase();
       const password = String(formData.get("password") ?? "");
       const supabase = getSupabaseBrowserClient();
 
       if (isLogin) {
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password,
+        });
         if (signInError) throw signInError;
         router.replace("/");
         return;
@@ -110,7 +120,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
       }
 
       const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
+        email: normalizedEmail,
         password,
         options: {
           data: { full_name: fullName },
@@ -124,11 +134,9 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
         setMessage("Check your email to verify your account before signing in.");
       }
     } catch (authError) {
+      const authMessage = authError instanceof Error ? authError.message : "Authentication failed.";
       setError(
-        describeAuthError(
-          authError instanceof Error ? authError.message : "Authentication failed.",
-          mode,
-        ),
+        mode === "signup" ? authMessage : describeAuthError(authMessage, mode),
       );
     } finally {
       setIsSubmitting(false);
@@ -173,6 +181,8 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
               type="email"
               placeholder="you@company.com"
               autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value.trim())}
             />
 
             <Field

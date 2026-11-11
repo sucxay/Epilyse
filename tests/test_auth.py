@@ -26,6 +26,7 @@ def test_missing_bearer_token_returns_401():
 def test_valid_supabase_token_extracts_uuid(monkeypatch):
     user_id = "12345678-1234-5678-1234-567812345678"
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.delenv("SUPABASE_JWT_ISSUER", raising=False)
     auth._jwks_client.cache_clear()
     with (
         patch.object(auth, "_jwks_client", return_value=FakeJwkClient()),
@@ -49,6 +50,15 @@ def test_valid_supabase_token_extracts_uuid(monkeypatch):
         raise AssertionError(f"Expected Supabase UUID {user_id}, got {result['id']}")
     if decode.call_args.kwargs["issuer"] != "https://project.supabase.co/auth/v1":
         raise AssertionError("JWT issuer was not validated against the Supabase issuer")
+
+
+def test_public_supabase_url_can_configure_backend(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.setenv("NEXT_PUBLIC_SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.delenv("SUPABASE_JWT_ISSUER", raising=False)
+
+    if auth._issuer() != "https://project.supabase.co/auth/v1":
+        raise AssertionError("Expected the public Supabase URL to configure the JWT issuer")
 
 
 def test_invalid_supabase_token_returns_401():

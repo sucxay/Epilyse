@@ -16,6 +16,10 @@ Set these backend environment variables in Render:
 ```text
 GITHUB_WEBHOOK_SECRET=<the same secret configured in GitHub>
 GITHUB_TOKEN=<a token with access to the registered repositories>
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_JWT_ISSUER=https://your-project.supabase.co/auth/v1
+SUPABASE_JWKS_URL=https://your-project.supabase.co/auth/v1/.well-known/jwks.json
+SUPABASE_JWT_AUDIENCE=authenticated
 EPILYSE_DB_PATH=/var/data/epilyse.db
 EPILYSE_GRAPH_ROOT=/var/data/graphs
 ```
