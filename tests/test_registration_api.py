@@ -78,3 +78,18 @@ def test_last_registered_repository_returns_empty_result():
 
     if response.status_code != 200 or response.json() != {"repository": None}:
         raise AssertionError(f"Expected an empty repository result, got {response.text}")
+
+
+def test_last_registered_repository_maps_mongodb_failure_to_503():
+    from backend.app.services.mongodb import MongoPersistenceError
+
+    with patch(
+        "backend.app.api.repositories.get_last_registered_repository",
+        side_effect=MongoPersistenceError("MongoDB is unavailable."),
+    ):
+        response = client.get("/repositories/last-registered")
+
+    if response.status_code != 503:
+        raise AssertionError(f"Expected 503, got {response.status_code}: {response.text}")
+    if response.json() != {"detail": "MongoDB is unavailable."}:
+        raise AssertionError(f"Unexpected MongoDB error response: {response.text}")

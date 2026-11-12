@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
+
 from backend.app.services import mongodb
 
 
@@ -64,3 +67,66 @@ def test_read_returns_document_without_mongodb_id(monkeypatch):
     if result != {"user_id": "user-1"}:
         raise AssertionError(f"Unexpected MongoDB document: {result}")
     collection.find_one.assert_called_once_with({"user_id": "user-1"})
+
+
+def test_missing_configuration_is_reported_without_constructing_client(monkeypatch):
+    monkeypatch.delenv("MONGODB_URI", raising=False)
+    monkeypatch.delenv("MONGODB_DATABASE", raising=False)
+    monkeypatch.delenv("MONGODB_COLLECTION", raising=False)
+    mongodb._client.cache_clear()
+
+    with patch.object(mongodb, "MongoClient") as mongo_client:
+        with pytest.raises(mongodb.MongoPersistenceError, match="MONGODB_URI"):
+            mongodb.get_last_registered_repository("user-1")
+
+    if mongo_client.called:
+        raise AssertionError("MongoClient was constructed without MongoDB configuration.")
+
+
+def test_malformed_uri_is_reported_without_exposing_uri(monkeypatch):
+    monkeypatch.setenv("MONGODB_URI", "not-a-mongodb-uri")
+    monkeypatch.setenv("MONGODB_DATABASE", "Epilyse")
+    monkeypatch.setenv("MONGODB_COLLECTION", "registered_repositories")
+    mongodb._client.cache_clear()
+
+    with pytest.raises(mongodb.MongoPersistenceError, match="MONGODB_URI"):
+        mongodb.get_last_registered_repository("user-1")
+
+
+def test_server_selection_timeout_is_classified_as_unavailable(monkeypatch):
+    monkeypatch.setenv("MONGODB_URI", "mongodb://example")
+    monkeypatch.setenv("MONGODB_DATABASE", "Epilyse")
+    monkeypatch.setenv("MONGODB_COLLECTION", "registered_repositories")
+    mongodb._client.cache_clear()
+    collection = MagicMock()
+    collection.find_one.side_effect = ServerSelectionTimeoutError("secret-host")
+    database = MagicMock()
+    database.__getitem__.return_value = collection
+    client = MagicMock()
+    client.__getitem__.return_value = database
+
+    with patch.object(mongodb, "MongoClient", return_value=client):
+        with pytest.raises(mongodb.MongoPersistenceError, match="unavailable"):
+            mongodb.get_last_registered_repository("user-1")
+
+
+def test_authentication_operation_failure_is_classified_without_details(monkeypatch):
+    monkeypatch.setenv("MONGODB_URI", "mongodb://user:password@example")
+    monkeypatch.setenv("MONGODB_DATABASE", "Epilyse")
+    monkeypatch.setenv("MONGODB_COLLECTION", "registered_repositories")
+    mongodb._client.cache_clear()
+    collection = MagicMock()
+    collection.find_one.side_effect = OperationFailure("password leaked", code=18)
+    database = MagicMock()
+    database.__getitem__.return_value = collection
+    client = MagicMock()
+    client.__getitem__.return_value = database
+
+    with patch.object(mongodb, "MongoClient", return_value=client):
+        with pytest.raises(mongodb.MongoPersistenceError) as error:
+            mongodb.get_last_registered_repository("user-1")
+
+    if str(error.value) != "MongoDB authentication failed. Could not read the registration.":
+        raise AssertionError(f"Unexpected safe authentication error: {error.value}")
+    if "password" in str(error.value):
+        raise AssertionError("MongoDB operation details were exposed.")
