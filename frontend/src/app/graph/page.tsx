@@ -9,6 +9,7 @@ import {
   type IngestionStatus,
   type RepositoryGraph,
 } from "@/lib/api";
+import { useLastRegisteredRepository } from "@/lib/useLastRegisteredRepository";
 
 export default function GraphPage() {
   const [graph, setGraph] = useState<RepositoryGraph | null>(null);
@@ -16,14 +17,18 @@ export default function GraphPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [repoName, setRepoName] = useState<string | null>(null);
+  const { repository: persistedRepository } = useLastRegisteredRepository();
 
   useEffect(() => {
     let active = true;
-    const repositoryId = window.localStorage.getItem("epilyse-repository-id");
+    const repositoryId =
+      persistedRepository?.repository_id ?? window.localStorage.getItem("epilyse-repository-id");
 
-    // Also get cached repo name from localStorage
+    // Prefer the MongoDB-persisted registration, then the cached repo name.
     const stored = window.localStorage.getItem("coderag-latest-graph");
-    if (stored) {
+    if (persistedRepository) {
+      setRepoName(`${persistedRepository.owner}/${persistedRepository.name}`);
+    } else if (stored) {
       try {
         const parsed = JSON.parse(stored);
         if (parsed?.registration?.owner && parsed?.registration?.name) {
@@ -83,7 +88,7 @@ export default function GraphPage() {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [persistedRepository]);
 
   const statusText =
     status === "running"

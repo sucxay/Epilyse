@@ -11,54 +11,122 @@ import {
   type RepositoryGraph,
   type RepositoryStatus,
 } from "@/lib/api";
+import { useLastRegisteredRepository } from "@/lib/useLastRegisteredRepository";
+
+interface CachedAnalysis {
+  registration: RegisterResponse;
+  clone: CloneResponse;
+  graph: RepositoryGraph;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isCachedAnalysis(value: unknown): value is CachedAnalysis {
+  if (!isRecord(value)) return false;
+  const { registration, clone, graph } = value;
+  return (
+    isRecord(registration) &&
+    typeof registration.repository_id === "string" &&
+    typeof registration.owner === "string" &&
+    typeof registration.name === "string" &&
+    isRecord(clone) &&
+    typeof clone.branch === "string" &&
+    typeof clone.commit_sha === "string" &&
+    isRecord(graph) &&
+    Array.isArray(graph.nodes) &&
+    Array.isArray(graph.edges)
+  );
+}
+
+function formatRegisteredAt(timestamp: string | null): string {
+  if (!timestamp) return "—";
+  const parsed = new Date(timestamp);
+  return Number.isNaN(parsed.getTime()) ? timestamp : parsed.toLocaleString();
+}
 
 export default function RepositoriesPage() {
-  const [cachedData, setCachedData] = useState<{
-    registration: RegisterResponse;
-    clone: CloneResponse;
-    graph: RepositoryGraph;
-  } | null>(null);
+  const [cachedData, setCachedData] = useState<CachedAnalysis | null>(null);
   const [repoStatus, setRepoStatus] = useState<RepositoryStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const {
+    repository: persistedRepository,
+    loading: persistedLoading,
+    error: persistenceError,
+  } = useLastRegisteredRepository();
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("coderag-latest-graph");
+    if (!stored) return;
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (isCachedAnalysis(parsed)) {
+        setCachedData(parsed);
+      }
+    } catch {
+      // Ignore malformed cached graph data.
+    }
+  }, []);
+
+  const repositoryId =
+    persistedRepository?.repository_id ?? cachedData?.registration.repository_id ?? null;
 
   useEffect(() => {
     let active = true;
-    const repoId = window.localStorage.getItem("epilyse-repository-id");
-    const stored = window.localStorage.getItem("coderag-latest-graph");
-
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed?.registration) {
-          setCachedData(parsed);
-        }
-      } catch {
-        // ignore
-      }
+    if (!repositoryId) {
+      setStatusLoading(false);
+      return () => {
+        active = false;
+      };
     }
 
-    async function loadStatus() {
-      if (!repoId) {
-        if (active) setLoading(false);
-        return;
-      }
-      try {
-        const status = await getRepositoryStatus(repoId);
+    setStatusLoading(true);
+    setRepoStatus(null);
+    getRepositoryStatus(repositoryId)
+      .then((status) => {
         if (active) setRepoStatus(status);
-      } catch {
-        // ignore network error
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
+      })
+      .catch(() => {
+        if (active) setRepoStatus(null);
+      })
+      .finally(() => {
+        if (active) setStatusLoading(false);
+      });
 
-    void loadStatus();
     return () => {
       active = false;
     };
-  }, []);
+  }, [repositoryId]);
 
-  const repo = cachedData?.registration || repoStatus;
+  const cachedOwnerName = cachedData
+    ? `${cachedData.registration.owner}/${cachedData.registration.name}`
+    : null;
+  const ownerName = persistedRepository
+    ? `${persistedRepository.owner}/${persistedRepository.name}`
+    : cachedOwnerName ??
+      (repoStatus ? `${repoStatus.owner}/${repoStatus.name}` : null);
+  const repositoryUrl =
+    persistedRepository?.url ?? cachedData?.registration.url ?? repoStatus?.url ?? null;
+  const defaultBranch =
+    repoStatus?.default_branch ?? cachedData?.registration.default_branch ?? null;
+  const activeBranch =
+    cachedData?.clone.branch ?? persistedRepository?.branch ?? repoStatus?.selected_branch ?? null;
+  const commitSha =
+    cachedData?.clone.commit_sha ??
+    persistedRepository?.commit ??
+    repoStatus?.latest_commit_sha ??
+    null;
+  const ingestionStatus =
+    repoStatus?.ingestion_status ?? cachedData?.registration.ingestion_status ?? null;
+  const registeredAt = persistedRepository?.timestamp ?? null;
+  const registrationStore = persistedRepository
+    ? "MongoDB"
+    : cachedData
+    ? "Browser cache"
+    : null;
+  const loading = persistedLoading || statusLoading;
+  const hasRepository = Boolean(repositoryId && ownerName);
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -70,7 +138,7 @@ export default function RepositoriesPage() {
           </span>
           <span className="text-white/[0.15]">/</span>
           <span className="text-xs font-medium text-ink">
-            {repo ? `${repo.owner}/${repo.name}` : "Workspace Repositories"}
+            {ownerName ?? "Workspace Repositories"}
           </span>
         </div>
         <div>
@@ -85,7 +153,20 @@ export default function RepositoriesPage() {
 
       {/* Main Content */}
       <div className="p-6 space-y-6 max-w-6xl w-full mx-auto">
-        {!repo && !loading ? (
+        {persistenceError && (
+          <div className="text-[11px] font-mono text-muted-dark border border-white/[0.08] rounded px-3 py-2">
+            MongoDB registration unavailable ({persistenceError}). Using browser cache when present.
+          </div>
+        )}
+
+        {loading && !hasRepository ? (
+          <div className="bg-surface border border-white/[0.08] rounded p-12 text-center">
+            <p className="text-sm font-medium text-ink">Loading Registered Repository</p>
+            <p className="mt-1 text-xs text-muted max-w-md mx-auto">
+              Checking your account&apos;s MongoDB registration and local workspace cache.
+            </p>
+          </div>
+        ) : !hasRepository ? (
           <div className="bg-surface border border-white/[0.08] rounded p-12 text-center">
             <p className="text-sm font-medium text-ink">No Repositories Registered</p>
             <p className="mt-1 text-xs text-muted max-w-md mx-auto">
@@ -107,13 +188,9 @@ export default function RepositoriesPage() {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-success" />
-                    <h3 className="text-sm font-semibold text-ink">
-                      {repo?.owner}/{repo?.name}
-                    </h3>
+                    <h3 className="text-sm font-semibold text-ink">{ownerName}</h3>
                   </div>
-                  <p className="text-xs font-mono text-muted-dark mt-0.5">
-                    {repo?.url}
-                  </p>
+                  <p className="text-xs font-mono text-muted-dark mt-0.5">{repositoryUrl ?? "—"}</p>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -140,39 +217,34 @@ export default function RepositoriesPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="divide-y divide-white/[0.06]">
-                  <StatRow
-                    label="Repository ID"
-                    value={
-                      repoStatus?.id ||
-                      (repo && "repository_id" in repo ? repo.repository_id : repo?.id) ||
-                      "—"
-                    }
-                  />
+                  <StatRow label="Repository ID" value={repositoryId ?? "—"} />
                   <StatRow
                     label="Default Branch"
-                    value={repo?.default_branch || "main"}
-                    badge="default"
+                    value={defaultBranch ?? "—"}
+                    badge={defaultBranch ? "default" : undefined}
                   />
+                  <StatRow label="Active Revision Branch" value={activeBranch ?? "—"} />
                   <StatRow
-                    label="Active Revision Branch"
-                    value={cachedData?.clone.branch || repo?.selected_branch || "main"}
+                    label="Registration Store"
+                    value={registrationStore ?? "—"}
+                    badge={persistedRepository ? "synced" : undefined}
+                    mono={false}
                   />
                 </div>
                 <div className="divide-y divide-white/[0.06]">
                   <StatRow
                     label="Commit SHA"
-                    value={
-                      cachedData?.clone.commit_sha
-                        ? cachedData.clone.commit_sha.slice(0, 10)
-                        : repoStatus?.latest_commit_sha
-                        ? repoStatus.latest_commit_sha.slice(0, 10)
-                        : "—"
-                    }
+                    value={commitSha ? commitSha.slice(0, 10) : "—"}
                   />
                   <StatRow
                     label="Ingestion State"
-                    value={repoStatus?.ingestion_status ?? repo?.ingestion_status ?? "completed"}
-                    badge={repoStatus?.ingestion_status ?? "active"}
+                    value={ingestionStatus ?? (persistedRepository ? "registered" : "—")}
+                    badge={ingestionStatus ?? (persistedRepository ? "mongo" : undefined)}
+                  />
+                  <StatRow
+                    label="Registered At"
+                    value={formatRegisteredAt(registeredAt)}
+                    mono={false}
                   />
                   <StatRow
                     label="Total AST Nodes"

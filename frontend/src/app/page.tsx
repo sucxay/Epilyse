@@ -6,6 +6,12 @@ import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { StatCard } from "@/components/StatCard";
 import { StatRow } from "@/components/StatRow";
 import type { CloneResponse, RegisterResponse, RepositoryGraph } from "@/lib/api";
+import { useLastRegisteredRepository } from "@/lib/useLastRegisteredRepository";
+
+function formatTimestamp(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  return Number.isNaN(parsed.getTime()) ? timestamp : parsed.toLocaleString();
+}
 
 export default function OverviewPage() {
   const [result, setResult] = useState<{
@@ -13,6 +19,7 @@ export default function OverviewPage() {
     clone: CloneResponse;
     graph: RepositoryGraph;
   } | null>(null);
+  const { repository: persistedRepository } = useLastRegisteredRepository();
 
   function handleComplete(
     registration: RegisterResponse,
@@ -31,6 +38,14 @@ export default function OverviewPage() {
   const fileCount = result?.clone.file_count ?? nodes.filter((n) => n.type === "file").length;
   const functionCount = nodes.filter((n) => n.kind === "function" || n.kind === "method").length;
   const classCount = nodes.filter((n) => n.kind === "class").length;
+  const persistedName = persistedRepository
+    ? `${persistedRepository.owner}/${persistedRepository.name}`
+    : null;
+  const activeRepositoryName = result
+    ? `${result.registration.owner}/${result.registration.name}`
+    : persistedName;
+  const checkoutBranch = result?.clone.branch ?? persistedRepository?.branch ?? null;
+  const checkoutCommitSha = result?.clone.commit_sha ?? persistedRepository?.commit ?? null;
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -42,9 +57,7 @@ export default function OverviewPage() {
           </span>
           <span className="text-white/[0.15]">/</span>
           <span className="text-xs font-medium text-ink truncate">
-            {result?.registration.name
-              ? `${result.registration.owner}/${result.registration.name}`
-              : "No repository selected"}
+            {activeRepositoryName ?? "No repository selected"}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -52,6 +65,11 @@ export default function OverviewPage() {
             <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-success/10 border border-success/20 text-[11px] font-mono text-success">
               <span className="w-1.5 h-1.5 rounded-full bg-success" />
               <span>Ready</span>
+            </div>
+          ) : persistedRepository ? (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-accent/10 border border-accent/20 text-[11px] font-mono text-accent">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <span>Registered</span>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/[0.04] border border-white/[0.08] text-[11px] font-mono text-muted">
@@ -75,6 +93,46 @@ export default function OverviewPage() {
       <div className="p-6 space-y-6 max-w-6xl w-full mx-auto">
         {/* Registration Panel */}
         <AnalysisPanel onComplete={handleComplete} />
+
+        {/* Server-persisted registration when no local analysis exists */}
+        {!result && persistedRepository && (
+          <div className="bg-surface border border-white/[0.08] rounded p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-success" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
+                  Registered Repository
+                </h3>
+              </div>
+              <p className="mt-1 text-sm font-medium text-ink truncate">{persistedName}</p>
+              <p className="mt-0.5 text-xs font-mono text-muted-dark truncate">
+                {persistedRepository.url}
+              </p>
+              <p className="mt-2 text-[11px] text-muted">
+                Persisted for your account in MongoDB · branch{" "}
+                <span className="font-mono text-ink">{persistedRepository.branch}</span> · commit{" "}
+                <span className="font-mono text-ink">
+                  {persistedRepository.commit ? persistedRepository.commit.slice(0, 10) : "—"}
+                </span>
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href="/repositories"
+                className="bg-white/[0.06] hover:bg-white/[0.1] text-ink border border-white/[0.1] text-xs font-medium px-4 py-2 rounded transition-colors"
+              >
+                Repositories
+              </Link>
+              <Link
+                href="/graph"
+                className="bg-accent hover:bg-accent-hover text-white text-xs font-medium px-4 py-2 rounded transition-colors inline-flex items-center gap-1.5"
+              >
+                <span>Open Graph</span>
+                <span className="text-[11px]">→</span>
+              </Link>
+            </div>
+          </div>
+        )}
 
         {/* Prominent Code Graph Banner if data available */}
         {result && (
@@ -181,10 +239,8 @@ export default function OverviewPage() {
               <StatRow
                 label="Repository"
                 value={
-                  result?.registration.url ? (
-                    <span className="truncate max-w-[200px] inline-block">
-                      {result.registration.owner}/{result.registration.name}
-                    </span>
+                  activeRepositoryName ? (
+                    <span className="truncate max-w-[200px] inline-block">{activeRepositoryName}</span>
                   ) : (
                     "—"
                   )
@@ -193,13 +249,20 @@ export default function OverviewPage() {
               />
               <StatRow
                 label="Branch"
-                value={result?.clone.branch ?? "—"}
-                badge={result?.clone.branch ? "git" : undefined}
+                value={checkoutBranch ?? "—"}
+                badge={checkoutBranch ? "git" : undefined}
               />
               <StatRow
                 label="Commit SHA"
-                value={result?.clone.commit_sha ? result.clone.commit_sha.slice(0, 10) : "—"}
+                value={checkoutCommitSha ? checkoutCommitSha.slice(0, 10) : "—"}
               />
+              {!result && persistedRepository && (
+                <StatRow
+                  label="Registered At"
+                  value={formatTimestamp(persistedRepository.timestamp)}
+                  mono={false}
+                />
+              )}
               <StatRow
                 label="Parser Status"
                 value={result ? "Ready" : "Idle"}

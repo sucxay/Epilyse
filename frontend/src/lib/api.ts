@@ -69,6 +69,17 @@ export interface RepositoryStatus {
   last_error: string | null;
 }
 
+export interface RegisteredRepository {
+  user_id: string;
+  repository_id: string;
+  url: string;
+  owner: string;
+  name: string;
+  branch: string;
+  commit: string;
+  timestamp: string;
+}
+
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
 const apiBaseUrl =
   configuredApiBaseUrl ||
@@ -160,6 +171,14 @@ export function buildRepositoryGraph(
   return request<RepositoryGraph>(`/repositories/${repositoryId}/graph`, {
     method: "POST",
     body: JSON.stringify({ commit_sha: normalizedCommitSha }),
+  });
+}
+
+export function getLastRegisteredRepository(): Promise<{
+  repository: RegisteredRepository | null;
+}> {
+  return request<{ repository: RegisteredRepository | null }>("/repositories/last-registered", {
+    method: "GET",
   });
 }
 
