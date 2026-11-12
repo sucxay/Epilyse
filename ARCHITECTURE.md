@@ -11,6 +11,7 @@
 - `backend/app/db/database.py`: Provides SQLite connections.
 - `backend/app/db/init_db.py`: Creates the SQLite schema.
 - `backend/app/services/github_ingestion.py`: Validates GitHub repositories and registration data.
+- `backend/app/services/mongodb.py`: Lazily persists and retrieves each authenticated user's latest repository registration.
 - `backend/app/services/repo_cloner.py`: Performs exact shallow Git checkouts.
 - `backend/app/services/source_analyzer.py`: Discovers and classifies source files.
 - `backend/app/parser/tree_sitter_parser.py`: Parses supported source files.
@@ -67,3 +68,5 @@ The UI uses a dark Orchestrator-inspired design language with a `#111318` backgr
 
 ## Production Persistence
 Uses SQLite and graph snapshots at paths configured by `EPILYSE_DB_PATH` and `EPILYSE_GRAPH_ROOT`. On Render, both paths must be inside the same mounted persistent disk; the default local paths remain under `data/`.
+
+MongoDB persistence requires `MONGODB_URI`, `MONGODB_DATABASE`, and `MONGODB_COLLECTION` in the backend deployment environment. The backend stores one latest-registration document per authenticated Supabase user UUID in the configured collection.

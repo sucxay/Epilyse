@@ -1,9 +1,17 @@
+from datetime import datetime, timezone
+from typing import Any
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from backend.app.auth import require_supabase_user
 from ..db.database import get_connection
 from ..schemas.github_schemas import RepositoryRegisterRequest
 from ..services.github_ingestion import register_repository 
+from ..services.mongodb import (
+    MongoPersistenceError,
+    get_last_registered_repository,
+    save_last_registered_repository,
+)
 from .webhook import process_push
 
 router = APIRouter(
@@ -12,11 +20,31 @@ router = APIRouter(
     dependencies=[Depends(require_supabase_user)],
 )
 @router.post("/register",status_code=201)
-def register(request : RepositoryRegisterRequest):
+def register(
+    request: RepositoryRegisterRequest,
+    user: dict[str, Any] = Depends(require_supabase_user),
+):
     try:
-        return register_repository(request.url , request.branch , request.sha)
+        registration = register_repository(request.url, request.branch, request.sha)
+        registration["registered_at"] = registration.get("registered_at") or datetime.now(
+            timezone.utc
+        ).isoformat()
+        save_last_registered_repository(user["id"], registration)
+        return registration
     except ValueError as exc :
         raise HTTPException(status_code=400 , detail=str(exc))
+    except MongoPersistenceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/last-registered")
+def last_registered_repository(
+    user: dict[str, Any] = Depends(require_supabase_user),
+):
+    try:
+        return {"repository": get_last_registered_repository(user["id"])}
+    except MongoPersistenceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/{repository_id}")
