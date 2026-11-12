@@ -20,6 +20,9 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_JWT_ISSUER=https://your-project.supabase.co/auth/v1
 SUPABASE_JWKS_URL=https://your-project.supabase.co/auth/v1/.well-known/jwks.json
 SUPABASE_JWT_AUDIENCE=authenticated
+MONGODB_URI=<MongoDB Atlas connection URI>
+MONGODB_DATABASE=Epilyse
+MONGODB_COLLECTION=registered_repositories
 EPILYSE_DB_PATH=/var/data/epilyse.db
 EPILYSE_GRAPH_ROOT=/var/data/graphs
 ```
@@ -30,6 +33,10 @@ and graph snapshots will disappear on restart or redeploy. The current
 architecture intentionally keeps SQLite and JSON snapshots together on that
 disk; a managed database/object-storage migration can be introduced later if
 horizontal scaling is required.
+
+MongoDB stores the latest registered repository per authenticated Supabase user.
+Keep the Atlas URI in the deployment environment only; never commit it or place
+credentials in `.env.example`.
 
 Set the frontend environment variable to the deployed backend:
 

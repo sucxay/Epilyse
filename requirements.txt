@@ -7,3 +7,4 @@ tree-sitter
 tree-sitter-python
 uvicorn[standard]
 PyJWT[crypto]
+pymongo

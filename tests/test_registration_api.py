@@ -17,7 +17,7 @@ def test_health_endpoint_returns_ok():
         raise AssertionError(f"Unexpected health response: {response.status_code} {response.text}")
 
 
-def test_registration_schedules_background_ingestion():
+def test_registration_persists_latest_repository():
     registration = {
         "repository_id": str(uuid4()),
         "github_id": 1,
@@ -31,13 +31,9 @@ def test_registration_schedules_background_ingestion():
         "ingestion_status": "pending",
         "sha": None,
     }
-    calls = []
     with (
         patch("backend.app.api.repositories.register_repository", return_value=registration),
-        patch(
-            "backend.app.api.repositories.process_push",
-            side_effect=lambda *args: calls.append(args),
-        ),
+        patch("backend.app.api.repositories.save_last_registered_repository") as save,
     ):
         response = client.post(
             "/repositories/register",
@@ -46,13 +42,39 @@ def test_registration_schedules_background_ingestion():
 
     if response.status_code != 201:
         raise AssertionError(f"Expected 201, got {response.status_code}: {response.text}")
-    expected = [
-        (
-            registration["repository_id"],
-            registration["url"],
-            registration["selected_branch"],
-            registration["current_commit_sha"],
-        )
-    ]
-    if calls != expected:
-        raise AssertionError(f"Expected ingestion call {expected}, got {calls}")
+    if save.call_args.args[0] != "00000000-0000-0000-0000-000000000001":
+        raise AssertionError("Registration was not keyed by the authenticated Supabase user.")
+    if save.call_args.args[1]["repository_id"] != registration["repository_id"]:
+        raise AssertionError("Registration persistence received the wrong repository.")
+
+
+def test_last_registered_repository_returns_authenticated_users_record():
+    repository = {
+        "user_id": "00000000-0000-0000-0000-000000000001",
+        "repository_id": "repo-1",
+        "url": "https://github.com/example/project",
+        "owner": "example",
+        "name": "project",
+        "branch": "main",
+        "commit": "a" * 40,
+        "timestamp": "2026-01-01T00:00:00+00:00",
+    }
+    with patch(
+        "backend.app.api.repositories.get_last_registered_repository",
+        return_value=repository,
+    ):
+        response = client.get("/repositories/last-registered")
+
+    if response.status_code != 200 or response.json() != {"repository": repository}:
+        raise AssertionError(f"Unexpected latest repository response: {response.text}")
+
+
+def test_last_registered_repository_returns_empty_result():
+    with patch(
+        "backend.app.api.repositories.get_last_registered_repository",
+        return_value=None,
+    ):
+        response = client.get("/repositories/last-registered")
+
+    if response.status_code != 200 or response.json() != {"repository": None}:
+        raise AssertionError(f"Expected an empty repository result, got {response.text}")
