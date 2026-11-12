@@ -2,11 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { StatRow } from "@/components/StatRow";
+import { useLastRegisteredRepository } from "@/lib/useLastRegisteredRepository";
+
+function formatTimestamp(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  return Number.isNaN(parsed.getTime()) ? timestamp : parsed.toLocaleString();
+}
 
 export default function SettingsPage() {
   const [cleared, setCleared] = useState(false);
   const [cachedRepoId, setCachedRepoId] = useState<string | null>(null);
   const [hasGraphCache, setHasGraphCache] = useState(false);
+  const {
+    repository: persistedRepository,
+    loading: persistedLoading,
+  } = useLastRegisteredRepository();
 
   useEffect(() => {
     const id = window.localStorage.getItem("epilyse-repository-id");
@@ -73,20 +83,71 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* Server-Side Registration */}
+        <div className="bg-surface border border-white/[0.08] rounded p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+              Server-Side Registration
+            </h3>
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border ${
+                persistedRepository
+                  ? "bg-success/10 text-success border-success/20"
+                  : "bg-white/[0.04] text-muted border-white/[0.08]"
+              }`}
+            >
+              {persistedLoading ? "Checking" : persistedRepository ? "MongoDB" : "None"}
+            </span>
+          </div>
+          <p className="text-xs text-muted leading-relaxed mb-4">
+            The latest registered repository is stored per authenticated account in MongoDB, so it
+            is available on any browser after signing in.
+          </p>
+
+          <div className="divide-y divide-white/[0.06]">
+            <StatRow
+              label="Registered Repository"
+              value={
+                persistedRepository
+                  ? `${persistedRepository.owner}/${persistedRepository.name}`
+                  : persistedLoading
+                  ? "Loading…"
+                  : "None registered"
+              }
+              mono={false}
+            />
+            <StatRow label="Branch" value={persistedRepository?.branch ?? "—"} />
+            <StatRow
+              label="Commit SHA"
+              value={
+                persistedRepository?.commit ? persistedRepository.commit.slice(0, 10) : "—"
+              }
+            />
+            <StatRow
+              label="Registered At"
+              value={
+                persistedRepository ? formatTimestamp(persistedRepository.timestamp) : "—"
+              }
+              mono={false}
+            />
+          </div>
+        </div>
+
         {/* Local Storage & Cache */}
         <div className="bg-surface border border-white/[0.08] rounded p-4">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted mb-3">
             Local Workspace Storage
           </h3>
           <p className="text-xs text-muted leading-relaxed mb-4">
-            Epilyse persists the latest analyzed AST graph and repository reference in browser
-            local storage for instant retrieval between page reloads.
+            Epilyse caches the latest analyzed AST graph in browser local storage for instant
+            retrieval between page reloads. The repository registration itself is stored
+            server-side in MongoDB, so clearing this cache does not unregister the repository.
           </p>
 
           <div className="divide-y divide-white/[0.06] mb-4">
             <StatRow
               label="Active Repository ID"
-              value={cachedRepoId || "None registered"}
+              value={cachedRepoId || persistedRepository?.repository_id || "None registered"}
             />
             <StatRow
               label="Cached Graph Cache State"
